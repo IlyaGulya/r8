@@ -65,6 +65,9 @@ public class AppInfoWithClassHierarchy extends AppInfo {
   // TODO(b/175659048): Consider hoisting to AppInfo to allow using MissingClasses in D8 desugar.
   private MissingClasses missingClasses;
 
+  private final MethodResolution legacyMethodResolution;
+  private final MethodResolution methodResolution;
+
   // For AppInfoWithLiveness subclass.
   protected AppInfoWithClassHierarchy(
       CommittedItems committedItems,
@@ -73,6 +76,11 @@ public class AppInfoWithClassHierarchy extends AppInfo {
       MissingClasses missingClasses) {
     super(classToFeatureSplitMap, committedItems, mainDexInfo);
     this.missingClasses = missingClasses;
+    this.legacyMethodResolution =
+        MethodResolution.createLegacy(this::definitionFor, dexItemFactory());
+    this.methodResolution =
+        MethodResolution.create(
+            this::contextIndependentDefinitionForWithResolutionResult, dexItemFactory());
   }
 
   // For desugaring.
@@ -81,6 +89,11 @@ public class AppInfoWithClassHierarchy extends AppInfo {
     // TODO(b/175659048): Migrate the reporting of missing classes in D8 desugar to MissingClasses,
     //  and use the missing classes from AppInfo instead of MissingClasses.empty().
     this.missingClasses = MissingClasses.empty();
+    this.legacyMethodResolution =
+        MethodResolution.createLegacy(this::definitionFor, dexItemFactory());
+    this.methodResolution =
+        MethodResolution.create(
+            this::contextIndependentDefinitionForWithResolutionResult, dexItemFactory());
   }
 
   public static AppInfoWithClassHierarchy createForDesugaring(AppInfo appInfo) {
@@ -695,8 +708,7 @@ public class AppInfoWithClassHierarchy extends AppInfo {
    * may be abstract.
    */
   public DexClassAndMethod lookupMaximallySpecificMethod(DexClass clazz, DexMethod method) {
-    return MethodResolution.createLegacy(this::definitionFor, dexItemFactory())
-        .lookupMaximallySpecificTarget(clazz, method);
+    return legacyMethodResolution.lookupMaximallySpecificTarget(clazz, method);
   }
 
   /**
@@ -705,18 +717,15 @@ public class AppInfoWithClassHierarchy extends AppInfo {
    */
   public List<Entry<DexClass, DexEncodedMethod>> getAbstractInterfaceMethods(
       DexClass clazz, DexMethod method) {
-    return MethodResolution.createLegacy(this::definitionFor, dexItemFactory())
-        .getAbstractInterfaceMethods(clazz, method);
+    return legacyMethodResolution.getAbstractInterfaceMethods(clazz, method);
   }
 
   MethodResolutionResult resolveMaximallySpecificTarget(DexClass clazz, DexMethod method) {
-    return MethodResolution.createLegacy(this::definitionFor, dexItemFactory())
-        .resolveMaximallySpecificTarget(clazz, method);
+    return legacyMethodResolution.resolveMaximallySpecificTarget(clazz, method);
   }
 
   MethodResolutionResult resolveMaximallySpecificTarget(LambdaDescriptor lambda, DexMethod method) {
-    return MethodResolution.createLegacy(this::definitionFor, dexItemFactory())
-        .resolveMaximallySpecificTarget(lambda, method);
+    return legacyMethodResolution.resolveMaximallySpecificTarget(lambda, method);
   }
 
   /**
@@ -890,8 +899,7 @@ public class AppInfoWithClassHierarchy extends AppInfo {
    */
   public MethodResolutionResult unsafeResolveMethodDueToDexFormatLegacy(DexMethod method) {
     assert checkIfObsolete();
-    return MethodResolution.createLegacy(this::definitionFor, dexItemFactory())
-        .unsafeResolveMethodDueToDexFormat(method);
+    return legacyMethodResolution.unsafeResolveMethodDueToDexFormat(method);
   }
 
   public MethodResolutionResult resolveMethodLegacy(DexMethod invokedMethod, boolean isInterface) {
@@ -948,8 +956,7 @@ public class AppInfoWithClassHierarchy extends AppInfo {
   public MethodResolutionResult resolveMethodOnClassLegacy(
       DexType holder, DexProto proto, DexString name) {
     assert checkIfObsolete();
-    return MethodResolution.createLegacy(this::definitionFor, dexItemFactory())
-        .resolveMethodOnClass(holder, proto, name);
+    return legacyMethodResolution.resolveMethodOnClass(holder, proto, name);
   }
 
   public MethodResolutionResult resolveMethodOnClassLegacy(DexClass clazz, DexMethod method) {
@@ -966,8 +973,7 @@ public class AppInfoWithClassHierarchy extends AppInfo {
   public MethodResolutionResult resolveMethodOnClassLegacy(
       DexClass clazz, DexProto proto, DexString name) {
     assert checkIfObsolete();
-    return MethodResolution.createLegacy(this::definitionFor, dexItemFactory())
-        .resolveMethodOnClass(clazz, proto, name);
+    return legacyMethodResolution.resolveMethodOnClass(clazz, proto, name);
   }
 
   public MethodResolutionResult resolveMethodOnInterfaceHolderLegacy(DexMethod method) {
@@ -977,8 +983,8 @@ public class AppInfoWithClassHierarchy extends AppInfo {
 
   public MethodResolutionResult resolveMethodOnInterfaceLegacy(DexType holder, DexMethod method) {
     assert checkIfObsolete();
-    return MethodResolution.createLegacy(this::definitionFor, dexItemFactory())
-        .resolveMethodOnInterface(holder, method.getProto(), method.getName());
+    return legacyMethodResolution.resolveMethodOnInterface(
+        holder, method.getProto(), method.getName());
   }
 
   public MethodResolutionResult resolveMethodOnInterfaceLegacy(DexClass clazz, DexMethod method) {
@@ -996,8 +1002,7 @@ public class AppInfoWithClassHierarchy extends AppInfo {
   public MethodResolutionResult resolveMethodOnInterfaceLegacy(
       DexClass clazz, DexProto proto, DexString name) {
     assert checkIfObsolete();
-    return MethodResolution.createLegacy(this::definitionFor, dexItemFactory())
-        .resolveMethodOnInterface(clazz, proto, name);
+    return legacyMethodResolution.resolveMethodOnInterface(clazz, proto, name);
   }
 
   /**
@@ -1008,9 +1013,7 @@ public class AppInfoWithClassHierarchy extends AppInfo {
    */
   public MethodResolutionResult unsafeResolveMethodDueToDexFormat(DexMethod method) {
     assert checkIfObsolete();
-    return MethodResolution.create(
-            this::contextIndependentDefinitionForWithResolutionResult, dexItemFactory())
-        .unsafeResolveMethodDueToDexFormat(method);
+    return methodResolution.unsafeResolveMethodDueToDexFormat(method);
   }
 
   public MethodResolutionResult resolveMethod(DexMethod invokedMethod, boolean isInterface) {
@@ -1044,9 +1047,7 @@ public class AppInfoWithClassHierarchy extends AppInfo {
   public MethodResolutionResult resolveMethodOnClass(
       DexType holder, DexProto proto, DexString name) {
     assert checkIfObsolete();
-    return MethodResolution.create(
-            this::contextIndependentDefinitionForWithResolutionResult, dexItemFactory())
-        .resolveMethodOnClass(holder, proto, name);
+    return methodResolution.resolveMethodOnClass(holder, proto, name);
   }
 
   public MethodResolutionResult resolveMethodOnClass(DexClass clazz, DexMethod method) {
@@ -1062,9 +1063,7 @@ public class AppInfoWithClassHierarchy extends AppInfo {
   public MethodResolutionResult resolveMethodOnClass(
       DexClass clazz, DexProto proto, DexString name) {
     assert checkIfObsolete();
-    return MethodResolution.create(
-            this::contextIndependentDefinitionForWithResolutionResult, dexItemFactory())
-        .resolveMethodOnClass(clazz, proto, name);
+    return methodResolution.resolveMethodOnClass(clazz, proto, name);
   }
 
   public MethodResolutionResult resolveMethodOnInterfaceHolder(DexMethod method) {
@@ -1074,9 +1073,7 @@ public class AppInfoWithClassHierarchy extends AppInfo {
 
   public MethodResolutionResult resolveMethodOnInterface(DexType holder, DexMethod method) {
     assert checkIfObsolete();
-    return MethodResolution.create(
-            this::contextIndependentDefinitionForWithResolutionResult, dexItemFactory())
-        .resolveMethodOnInterface(holder, method.getProto(), method.getName());
+    return methodResolution.resolveMethodOnInterface(holder, method.getProto(), method.getName());
   }
 
   public MethodResolutionResult resolveMethodOnInterface(DexClass clazz, DexMethod method) {
@@ -1093,9 +1090,7 @@ public class AppInfoWithClassHierarchy extends AppInfo {
   public MethodResolutionResult resolveMethodOnInterface(
       DexClass clazz, DexProto proto, DexString name) {
     assert checkIfObsolete();
-    return MethodResolution.create(
-            this::contextIndependentDefinitionForWithResolutionResult, dexItemFactory())
-        .resolveMethodOnInterface(clazz, proto, name);
+    return methodResolution.resolveMethodOnInterface(clazz, proto, name);
   }
 
   /**

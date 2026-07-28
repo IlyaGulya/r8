@@ -8,6 +8,7 @@ import com.android.tools.r8.graph.ProgramMethod;
 import com.android.tools.r8.shaking.AppInfoWithLiveness;
 import com.android.tools.r8.utils.timing.Timing;
 import com.google.common.collect.Sets;
+import java.util.HashMap;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -40,7 +41,9 @@ abstract class IRProcessingCallGraphBuilderBase extends CallGraphBuilderBase<Nod
     assert cycleEliminator.breakCycles(nodesWithDeterministicOrder).numberOfRemovedCallEdges()
         == 0; // The cycles should be gone.
 
-    return new CallGraph(nodes);
+    // The graph is populated concurrently, but consumed sequentially in processing waves. Avoid
+    // retaining the concurrent iteration overhead in CallGraph.extractNodes().
+    return new CallGraph(new HashMap<>(nodes));
   }
 
   @Override

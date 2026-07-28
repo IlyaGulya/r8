@@ -56,7 +56,7 @@ public class DexDistributionRefinement {
   // removal.
   private final Map<VirtualFile, LinkedHashSet<DexProgramClass>>
       fileToClassesWithDeterministicOrder = new IdentityHashMap<>();
-  private final Map<DexProgramClass, ClassItems> itemsByClass;
+  private final Map<DexProgramClass, ClassItems> itemsByClass = new ConcurrentHashMap<>();
 
   private DexDistributionRefinement(
       AppView<?> appView, VirtualFileCycler cycler, List<VirtualFile> filesSubjectToRefinement) {
@@ -65,11 +65,6 @@ public class DexDistributionRefinement {
     this.enableContainerDex = appView.options().enableContainerDex();
     this.files = new LinkedHashSet<>(filesSubjectToRefinement);
     this.rewriter = new LensCodeRewriterUtils(appView, true);
-    int numberOfClasses = 0;
-    for (VirtualFile file : filesSubjectToRefinement) {
-      numberOfClasses += file.classes().size();
-    }
-    this.itemsByClass = new ConcurrentHashMap<>(numberOfClasses);
     initialize();
   }
 

@@ -465,6 +465,9 @@ public class SyntheticItems {
       assert !isPendingSynthetic(type);
       return programOrClasspathClassNotOnLibrary;
     }
+    if (pending.isEmpty()) {
+      return app.contextIndependentDefinitionForWithResolutionResult(type);
+    }
     SyntheticDefinition<?, ?, ?> item = pending.definitions.get(type);
     if (item != null) {
       DexClass clazz = item.getHolder();
@@ -485,6 +488,9 @@ public class SyntheticItems {
     if (programOrClasspathClassNotOnLibrary != null) {
       assert !isPendingSynthetic(type);
       return programOrClasspathClassNotOnLibrary.asDexClass();
+    }
+    if (pending.isEmpty()) {
+      return app.definitionFor(type);
     }
     SyntheticDefinition<?, ?, ?> item = pending.definitions.get(type);
     if (item != null) {

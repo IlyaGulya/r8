@@ -37,7 +37,7 @@ public class DirectMappedDexApplication extends DexApplication {
   private List<KeepDeclaration> keepDeclarations;
 
   // Unmodifiable mapping of all types to their definitions.
-  private final ImmutableMap<DexType, ProgramOrClasspathClass> programOrClasspathClasses;
+  private final Map<DexType, ProgramOrClasspathClass> programOrClasspathClasses;
   private final ImmutableMap<DexType, DexLibraryClass> libraryClasses;
 
   // Collections of different types for iteration.
@@ -47,7 +47,7 @@ public class DirectMappedDexApplication extends DexApplication {
   private DirectMappedDexApplication(
       ClassNameMapper proguardMap,
       DexApplicationReadFlags flags,
-      ImmutableMap<DexType, ProgramOrClasspathClass> programOrClasspathClasses,
+      Map<DexType, ProgramOrClasspathClass> programOrClasspathClasses,
       ImmutableMap<DexType, DexLibraryClass> libraryClasses,
       ImmutableCollection<DexProgramClass> programClasses,
       ImmutableCollection<DexClasspathClass> classpathClasses,
@@ -375,7 +375,7 @@ public class DirectMappedDexApplication extends DexApplication {
         return new DirectMappedDexApplication(
             proguardMap,
             flags,
-            ImmutableMap.copyOf(programAndClasspathClasses),
+            Collections.unmodifiableMap(programAndClasspathClasses),
             getLibraryClassesAsImmutableMap(),
             ImmutableList.copyOf(getProgramClasses()),
             newClasspathClasses,

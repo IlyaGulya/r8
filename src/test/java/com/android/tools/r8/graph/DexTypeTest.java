@@ -7,6 +7,8 @@ import static com.android.tools.r8.KotlinCompilerTool.KotlinCompilerVersion.KOTL
 import static org.hamcrest.CoreMatchers.hasItems;
 import static org.hamcrest.CoreMatchers.not;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
 
 import com.android.tools.r8.ToolHelper;
 import com.android.tools.r8.dex.ApplicationReader;
@@ -77,6 +79,24 @@ public class DexTypeTest {
     HashSet<DexType> set = new HashSet<>(interfaces.size());
     interfaces.forEach((iface, ignoredIsKnown) -> set.add(iface));
     return set;
+  }
+
+  @Test
+  public void equalityUsesFactoryIdsWithStructuralFallback() {
+    DexItemFactory firstFactory = new DexItemFactory();
+    DexItemFactory secondFactory = new DexItemFactory();
+    DexType firstA = firstFactory.createType("Lexample/A;");
+    DexType firstB = firstFactory.createType("Lexample/B;");
+    DexType secondA = secondFactory.createType("Lexample/A;");
+
+    assertNotEquals(firstA, firstB);
+    assertEquals(firstA, secondA);
+    assertEquals(firstA.hashCode(), secondA.hashCode());
+
+    DexType firstWithoutId = new DexType(firstFactory.createString("Lexample/WithoutId;"));
+    DexType secondWithoutId = new DexType(secondFactory.createString("Lexample/WithoutId;"));
+    assertEquals(firstWithoutId, secondWithoutId);
+    assertNotEquals(firstA, "Lexample/A;");
   }
 
   @Test

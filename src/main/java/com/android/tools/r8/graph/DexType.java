@@ -195,7 +195,11 @@ public class DexType extends DexReference implements NamingLensComparable<DexTyp
   @Override
   public boolean computeEquals(Object other) {
     if (other instanceof DexType) {
-      return descriptor.equals(((DexType) other).descriptor);
+      DexType otherType = (DexType) other;
+      if (factoryIdentity != NO_FACTORY_ID && factoryIdentity == otherType.factoryIdentity) {
+        return factoryId == otherType.factoryId;
+      }
+      return descriptor.equals(otherType.descriptor);
     }
     return false;
   }

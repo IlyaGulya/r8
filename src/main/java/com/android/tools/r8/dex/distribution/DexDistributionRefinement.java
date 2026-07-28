@@ -155,7 +155,7 @@ public class DexDistributionRefinement {
         (clazz, threadTiming) -> {
           ClassItems items = itemsByClass.computeIfAbsent(clazz, this::collectItems);
           PriorityQueue<Pair<VirtualFile, Integer>> targetFiles = findTargetFiles(file, items);
-          if (targetFiles != null && !targetFiles.isEmpty()) {
+          if (!targetFiles.isEmpty()) {
             pendingMoveTasks.put(clazz, c -> moveClass(c, file, targetFiles, items));
           }
         },
@@ -203,14 +203,9 @@ public class DexDistributionRefinement {
     int estimatedSavingsFromRemovalInBytes =
         getNumberOfItemsWithReferenceCount(items.all, sourceFile, 1);
 
-    // Target cost is non-negative, so no target can improve on zero source savings.
-    if (estimatedSavingsFromRemovalInBytes == 0) {
-      return null;
-    }
-
-    // TODO(b/473427453): To improve build speed, consider returning null here when the estimated
-    //  savings are small compared to the number of items in the class (i.e., the class already fits
-    //  well in the current dex file).
+    // TODO(b/473427453): To improve build speed, consider if we can return null here if if the
+    //  estimated savings are small compared to the number of items in the class (i.e., the class
+    //  already fits well in the current dex file).
 
     PriorityQueue<Pair<VirtualFile, Integer>> targetFiles =
         new PriorityQueue<>(Comparator.comparingInt(Pair::getSecond));

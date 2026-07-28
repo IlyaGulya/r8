@@ -36,8 +36,8 @@ public class DirectMappedDexApplication extends DexApplication {
   private final Map<Code, DexEncodedMethod> codeOwners = new IdentityHashMap<>();
   private List<KeepDeclaration> keepDeclarations;
 
-  // Unmodifiable mapping of all types to their definitions.
-  private final Map<DexType, ProgramOrClasspathClass> programOrClasspathClasses;
+  // Factory-indexed mapping of all program and classpath types to their definitions.
+  private final ProgramOrClasspathClass[] programOrClasspathClasses;
   private final ImmutableMap<DexType, DexLibraryClass> libraryClasses;
 
   // Collections of different types for iteration.
@@ -47,7 +47,7 @@ public class DirectMappedDexApplication extends DexApplication {
   private DirectMappedDexApplication(
       ClassNameMapper proguardMap,
       DexApplicationReadFlags flags,
-      Map<DexType, ProgramOrClasspathClass> programOrClasspathClasses,
+      ProgramOrClasspathClass[] programOrClasspathClasses,
       ImmutableMap<DexType, DexLibraryClass> libraryClasses,
       ImmutableCollection<DexProgramClass> programClasses,
       ImmutableCollection<DexClasspathClass> classpathClasses,
@@ -102,7 +102,7 @@ public class DirectMappedDexApplication extends DexApplication {
   public ClassResolutionResult contextIndependentDefinitionForWithResolutionResult(DexType type) {
     assert type.isClassType() : "Cannot lookup definition for type: " + type;
     DexLibraryClass libraryClass = libraryClasses.get(type);
-    ProgramOrClasspathClass programOrClasspathClass = programOrClasspathClasses.get(type);
+    ProgramOrClasspathClass programOrClasspathClass = getProgramOrClasspathClass(type);
     if (libraryClass == null && programOrClasspathClass == null) {
       return noResult();
     } else if (libraryClass != null && programOrClasspathClass == null) {
@@ -117,7 +117,7 @@ public class DirectMappedDexApplication extends DexApplication {
   @Override
   public DexClass definitionFor(DexType type) {
     assert type.isClassType() : "Cannot lookup definition for type: " + type;
-    ProgramOrClasspathClass programOrClasspathClass = programOrClasspathClasses.get(type);
+    ProgramOrClasspathClass programOrClasspathClass = getProgramOrClasspathClass(type);
     if (programOrClasspathClass != null && programOrClasspathClass.isProgramClass()) {
       return programOrClasspathClass.asDexClass();
     }
@@ -129,7 +129,7 @@ public class DirectMappedDexApplication extends DexApplication {
 
   @Override
   public ProgramOrClasspathClass definitionForProgramOrClasspathClassNotOnLibrary(DexType type) {
-    ProgramOrClasspathClass programOrClasspathClass = programOrClasspathClasses.get(type);
+    ProgramOrClasspathClass programOrClasspathClass = getProgramOrClasspathClass(type);
     if (programOrClasspathClass != null && !libraryClasses.containsKey(type)) {
       return programOrClasspathClass;
     }
@@ -138,8 +138,17 @@ public class DirectMappedDexApplication extends DexApplication {
 
   @Override
   public DexProgramClass programDefinitionFor(DexType type) {
-    ProgramOrClasspathClass programOrClasspathClass = programOrClasspathClasses.get(type);
+    ProgramOrClasspathClass programOrClasspathClass = getProgramOrClasspathClass(type);
     return programOrClasspathClass == null ? null : programOrClasspathClass.asProgramClass();
+  }
+
+  private ProgramOrClasspathClass getProgramOrClasspathClass(DexType type) {
+    int factoryId = type.getFactoryId();
+    if (factoryId < 0 || factoryId >= programOrClasspathClasses.length) {
+      return null;
+    }
+    ProgramOrClasspathClass clazz = programOrClasspathClasses[factoryId];
+    return clazz != null && clazz.getType().isIdenticalTo(type) ? clazz : null;
   }
 
   @Override
@@ -375,7 +384,7 @@ public class DirectMappedDexApplication extends DexApplication {
         return new DirectMappedDexApplication(
             proguardMap,
             flags,
-            Collections.unmodifiableMap(programAndClasspathClasses),
+            createProgramOrClasspathClassesByFactoryId(programAndClasspathClasses),
             getLibraryClassesAsImmutableMap(),
             ImmutableList.copyOf(getProgramClasses()),
             newClasspathClasses,
@@ -384,6 +393,22 @@ public class DirectMappedDexApplication extends DexApplication {
             options,
             timing);
       }
+    }
+
+    private static ProgramOrClasspathClass[] createProgramOrClasspathClassesByFactoryId(
+        Map<DexType, ProgramOrClasspathClass> classes) {
+      int maxFactoryId = -1;
+      for (DexType type : classes.keySet()) {
+        assert type.getFactoryId() >= 0;
+        maxFactoryId = Math.max(maxFactoryId, type.getFactoryId());
+      }
+      ProgramOrClasspathClass[] classesByFactoryId = new ProgramOrClasspathClass[maxFactoryId + 1];
+      classes.forEach(
+          (type, clazz) -> {
+            assert classesByFactoryId[type.getFactoryId()] == null;
+            classesByFactoryId[type.getFactoryId()] = clazz;
+          });
+      return classesByFactoryId;
     }
 
     private <T extends ProgramOrClasspathClass> boolean addAll(

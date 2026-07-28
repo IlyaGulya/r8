@@ -54,6 +54,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -104,6 +105,8 @@ public class DexItemFactory {
 
   private Map<DexString, DexType> types = new ConcurrentHashMap<>();
   private Map<DexString, DexType> committedTypes = new HashMap<>();
+  // Dense identifiers for data-oriented lookup tables keyed by canonical types.
+  private final AtomicInteger nextTypeId = new AtomicInteger();
 
   private Map<DexField, DexField> fields = new ConcurrentHashMap<>();
   private Map<DexField, DexField> committedFields = new HashMap<>();
@@ -3607,14 +3610,16 @@ public class DexItemFactory {
       return committed;
     }
     if (descriptor.getFirstByteAsChar() != '[') {
-      return types.computeIfAbsent(descriptor, DexType::new);
+      return types.computeIfAbsent(
+          descriptor, key -> new DexType(key, nextTypeId.getAndIncrement()));
     }
     DexType pending = types.get(descriptor);
     if (pending != null) {
       return pending;
     }
     DexType elementType = createType(descriptor.toArrayElementDescriptor(this));
-    return types.computeIfAbsent(descriptor, d -> new DexArrayType(d, elementType));
+    return types.computeIfAbsent(
+        descriptor, key -> new DexArrayType(key, elementType, nextTypeId.getAndIncrement()));
   }
 
   public DexType createType(String descriptor) {

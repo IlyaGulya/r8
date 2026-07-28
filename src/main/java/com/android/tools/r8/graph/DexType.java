@@ -45,6 +45,7 @@ public class DexType extends DexReference implements NamingLensComparable<DexTyp
   }
 
   public static final DexType[] EMPTY_ARRAY = {};
+  static final int NO_FACTORY_ID = -1;
 
   // Bundletool is merging classes that may originate from a build with an old version of R8.
   // Allow merging of classes that use names from older versions of R8.
@@ -61,11 +62,21 @@ public class DexType extends DexReference implements NamingLensComparable<DexTyp
           "-$$LambdaGroup$");
 
   public final DexString descriptor;
+  private final int factoryId;
   private String toStringCache = null;
 
   DexType(DexString descriptor) {
+    this(descriptor, NO_FACTORY_ID);
+  }
+
+  DexType(DexString descriptor, int factoryId) {
     assert !descriptor.toString().contains(".") : "Malformed descriptor: " + descriptor;
     this.descriptor = descriptor;
+    this.factoryId = factoryId;
+  }
+
+  int getFactoryId() {
+    return factoryId;
   }
 
   public ClassReference asClassReference() {

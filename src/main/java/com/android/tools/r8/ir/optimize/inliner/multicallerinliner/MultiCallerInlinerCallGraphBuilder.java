@@ -33,6 +33,7 @@ public class MultiCallerInlinerCallGraphBuilder
         this::processClass,
         appView.options().getThreadingModule(),
         executorService);
+    flushLikelySpuriousCallSites();
     return new MultiCallerInlinerCallGraph(nodes);
   }
 
@@ -43,7 +44,12 @@ public class MultiCallerInlinerCallGraphBuilder
   private void processMethod(ProgramMethod method) {
     MultiCallerInlinerInvokeRegistry registry =
         new MultiCallerInlinerInvokeRegistry(
-            appView, getOrCreateNode(method), this::getOrCreateNode, possibleProgramTargetsCache);
+            appView,
+            getOrCreateNode(method),
+            this::getOrCreateNode,
+            possibleProgramTargetsCache,
+            likelySpuriousProgramTargetsCache,
+            likelySpuriousCallSiteCounts);
     method.registerCodeReferences(registry);
   }
 }

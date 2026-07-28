@@ -19,6 +19,7 @@ import com.android.tools.r8.graph.ProgramMethod;
 import com.android.tools.r8.shaking.AppInfoWithLiveness;
 import com.android.tools.r8.utils.collections.ProgramMethodSet;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
@@ -31,8 +32,17 @@ public class IRProcessingCallGraphUseRegistry<N extends NodeBase<N>> extends Inv
       N currentMethod,
       Function<ProgramMethod, N> nodeFactory,
       Map<DexMethod, ProgramMethodSet> possibleProgramTargetsCache,
+      Map<DexMethod, ProgramMethodSet> likelySpuriousProgramTargetsCache,
+      Map<DexMethod, AtomicInteger> likelySpuriousCallSiteCounts,
       Predicate<ProgramMethod> targetTester) {
-    super(appView, currentMethod, nodeFactory, possibleProgramTargetsCache, targetTester);
+    super(
+        appView,
+        currentMethod,
+        nodeFactory,
+        possibleProgramTargetsCache,
+        likelySpuriousProgramTargetsCache,
+        likelySpuriousCallSiteCounts,
+        targetTester);
     this.fieldAccessInfoCollection = appView.appInfo().getFieldAccessInfoCollection();
   }
 

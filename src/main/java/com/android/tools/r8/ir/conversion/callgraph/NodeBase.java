@@ -17,6 +17,8 @@ public abstract class NodeBase<N extends NodeBase<N>> {
 
   public abstract void addCallerConcurrently(N caller, boolean likelySpuriousCallEdge);
 
+  public abstract void addLikelySpuriousCallSites(int numberOfCallSites);
+
   public abstract void addReaderConcurrently(N reader);
 
   public DexEncodedMethod getMethod() {

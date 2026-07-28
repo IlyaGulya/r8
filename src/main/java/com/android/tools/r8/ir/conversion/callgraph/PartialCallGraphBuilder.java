@@ -35,6 +35,8 @@ public class PartialCallGraphBuilder extends IRProcessingCallGraphBuilderBase {
             getOrCreateNode(method),
             this::getOrCreateNode,
             possibleProgramTargetsCache,
+            likelySpuriousProgramTargetsCache,
+            likelySpuriousCallSiteCounts,
             seeds::contains);
     method.registerCodeReferences(registry);
   }

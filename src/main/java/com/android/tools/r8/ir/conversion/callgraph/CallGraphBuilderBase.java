@@ -11,6 +11,7 @@ import com.android.tools.r8.shaking.AppInfoWithLiveness;
 import com.android.tools.r8.utils.collections.ProgramMethodSet;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public abstract class CallGraphBuilderBase<N extends NodeBase<N>> {
 
@@ -18,6 +19,10 @@ public abstract class CallGraphBuilderBase<N extends NodeBase<N>> {
 
   protected final Map<DexMethod, N> nodes = new ConcurrentHashMap<>();
   protected final Map<DexMethod, ProgramMethodSet> possibleProgramTargetsCache =
+      new ConcurrentHashMap<>();
+  protected final Map<DexMethod, ProgramMethodSet> likelySpuriousProgramTargetsCache =
+      new ConcurrentHashMap<>();
+  protected final Map<DexMethod, AtomicInteger> likelySpuriousCallSiteCounts =
       new ConcurrentHashMap<>();
 
   public CallGraphBuilderBase(AppView<AppInfoWithLiveness> appView) {
@@ -28,5 +33,17 @@ public abstract class CallGraphBuilderBase<N extends NodeBase<N>> {
 
   protected N getOrCreateNode(ProgramMethod method) {
     return nodes.computeIfAbsent(method.getReference(), ignore -> createNode(method));
+  }
+
+  protected void flushLikelySpuriousCallSites() {
+    likelySpuriousCallSiteCounts.forEach(
+        (method, count) -> {
+          ProgramMethodSet targets = likelySpuriousProgramTargetsCache.get(method);
+          if (targets != null) {
+            for (ProgramMethod target : targets) {
+              getOrCreateNode(target).addLikelySpuriousCallSites(count.get());
+            }
+          }
+        });
   }
 }

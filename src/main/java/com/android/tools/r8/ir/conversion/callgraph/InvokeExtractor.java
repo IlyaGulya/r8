@@ -20,6 +20,7 @@ import com.android.tools.r8.ir.code.InvokeType;
 import com.android.tools.r8.shaking.AppInfoWithLiveness;
 import com.android.tools.r8.utils.collections.ProgramMethodSet;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
@@ -29,6 +30,8 @@ public class InvokeExtractor<N extends NodeBase<N>> extends DefaultUseRegistry<P
   protected final N currentMethod;
   protected final Function<ProgramMethod, N> nodeFactory;
   protected final Map<DexMethod, ProgramMethodSet> possibleProgramTargetsCache;
+  protected final Map<DexMethod, ProgramMethodSet> likelySpuriousProgramTargetsCache;
+  protected final Map<DexMethod, AtomicInteger> likelySpuriousCallSiteCounts;
   protected final Predicate<ProgramMethod> targetTester;
 
   public InvokeExtractor(
@@ -36,12 +39,16 @@ public class InvokeExtractor<N extends NodeBase<N>> extends DefaultUseRegistry<P
       N currentMethod,
       Function<ProgramMethod, N> nodeFactory,
       Map<DexMethod, ProgramMethodSet> possibleProgramTargetsCache,
+      Map<DexMethod, ProgramMethodSet> likelySpuriousProgramTargetsCache,
+      Map<DexMethod, AtomicInteger> likelySpuriousCallSiteCounts,
       Predicate<ProgramMethod> targetTester) {
     super(appViewWithLiveness, currentMethod.getProgramMethod());
     this.appViewWithLiveness = appViewWithLiveness;
     this.currentMethod = currentMethod;
     this.nodeFactory = nodeFactory;
     this.possibleProgramTargetsCache = possibleProgramTargetsCache;
+    this.likelySpuriousProgramTargetsCache = likelySpuriousProgramTargetsCache;
+    this.likelySpuriousCallSiteCounts = likelySpuriousCallSiteCounts;
     this.targetTester = targetTester;
   }
 
@@ -67,6 +74,18 @@ public class InvokeExtractor<N extends NodeBase<N>> extends DefaultUseRegistry<P
       return;
     }
     nodeFactory.apply(callee).addCallerConcurrently(currentMethod, likelySpuriousCallEdge);
+  }
+
+  protected boolean isCallEdgeEligible(ProgramMethod callee) {
+    if (!targetTester.test(callee)
+        || callee.getDefinition().isAbstract()
+        || callee.getDefinition().isNative()
+        || appViewWithLiveness
+            .getKeepInfo(callee)
+            .isCodeReplacementAllowed(appViewWithLiveness.options(), callee)) {
+      return false;
+    }
+    return true;
   }
 
   private void processInvoke(InvokeType originalType, DexMethod originalMethod) {
@@ -160,8 +179,25 @@ public class InvokeExtractor<N extends NodeBase<N>> extends DefaultUseRegistry<P
       boolean likelySpuriousCallEdge =
           possibleProgramTargets.size()
               >= appViewWithLiveness.options().callGraphLikelySpuriousCallEdgeThreshold;
-      for (ProgramMethod possibleTarget : possibleProgramTargets) {
-        addCallEdge(possibleTarget, likelySpuriousCallEdge);
+      if (likelySpuriousCallEdge) {
+        likelySpuriousProgramTargetsCache.computeIfAbsent(
+            target,
+            ignore -> {
+              ProgramMethodSet eligibleTargets = ProgramMethodSet.create();
+              for (ProgramMethod possibleTarget : possibleProgramTargets) {
+                if (isCallEdgeEligible(possibleTarget)) {
+                  eligibleTargets.add(possibleTarget);
+                }
+              }
+              return eligibleTargets;
+            });
+        likelySpuriousCallSiteCounts
+            .computeIfAbsent(target, ignore -> new AtomicInteger())
+            .incrementAndGet();
+      } else {
+        for (ProgramMethod possibleTarget : possibleProgramTargets) {
+          addCallEdge(possibleTarget, false);
+        }
       }
     }
   }

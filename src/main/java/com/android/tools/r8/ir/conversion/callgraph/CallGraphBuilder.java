@@ -41,6 +41,8 @@ public class CallGraphBuilder extends IRProcessingCallGraphBuilderBase {
             getOrCreateNode(method),
             this::getOrCreateNode,
             possibleProgramTargetsCache,
+            likelySpuriousProgramTargetsCache,
+            likelySpuriousCallSiteCounts,
             alwaysTrue());
     method.registerCodeReferences(registry);
   }

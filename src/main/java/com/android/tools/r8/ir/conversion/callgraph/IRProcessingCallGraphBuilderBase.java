@@ -22,6 +22,7 @@ abstract class IRProcessingCallGraphBuilderBase extends CallGraphBuilderBase<Nod
     timing.begin("Build IR processing order constraints");
     timing.begin("Build call graph");
     populateGraph(executorService);
+    flushLikelySpuriousCallSites();
     assert verifyNoRedundantFieldReadEdges();
     timing.end();
     assert verifyAllMethodsWithCodeExists();

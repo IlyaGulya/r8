@@ -115,6 +115,11 @@ public class SingleCallerInlinerCallGraph extends CallGraphBase<Node> {
     }
 
     @Override
+    public void addLikelySpuriousCallSites(int count) {
+      throw new Unreachable();
+    }
+
+    @Override
     public void addReaderConcurrently(Node reader) {
       throw new Unreachable();
     }

@@ -59,6 +59,13 @@ public class Node extends NodeBase<Node> implements Comparable<Node>, CycleElimi
   }
 
   @Override
+  public void addLikelySpuriousCallSites(int count) {
+    synchronized (callers) {
+      numberOfCallSites += count;
+    }
+  }
+
+  @Override
   public void addReaderConcurrently(Node reader) {
     if (reader != this) {
       synchronized (callers) {

@@ -17,6 +17,7 @@ import com.android.tools.r8.ir.conversion.callgraph.InvokeExtractor;
 import com.android.tools.r8.shaking.AppInfoWithLiveness;
 import com.android.tools.r8.utils.collections.ProgramMethodSet;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
 public class MultiCallerInlinerInvokeRegistry extends InvokeExtractor<MultiCallerInlinerNode> {
@@ -25,8 +26,17 @@ public class MultiCallerInlinerInvokeRegistry extends InvokeExtractor<MultiCalle
       AppView<AppInfoWithLiveness> appView,
       MultiCallerInlinerNode currentMethod,
       Function<ProgramMethod, MultiCallerInlinerNode> nodeFactory,
-      Map<DexMethod, ProgramMethodSet> possibleProgramTargetsCache) {
-    super(appView, currentMethod, nodeFactory, possibleProgramTargetsCache, alwaysTrue());
+      Map<DexMethod, ProgramMethodSet> possibleProgramTargetsCache,
+      Map<DexMethod, ProgramMethodSet> likelySpuriousProgramTargetsCache,
+      Map<DexMethod, AtomicInteger> likelySpuriousCallSiteCounts) {
+    super(
+        appView,
+        currentMethod,
+        nodeFactory,
+        possibleProgramTargetsCache,
+        likelySpuriousProgramTargetsCache,
+        likelySpuriousCallSiteCounts,
+        alwaysTrue());
   }
 
   @Override

@@ -24,6 +24,11 @@ public class MultiCallerInlinerNode extends NodeBase<MultiCallerInlinerNode> {
   }
 
   @Override
+  public void addLikelySpuriousCallSites(int count) {
+    numberOfCallSites.addAndGet(count);
+  }
+
+  @Override
   public void addReaderConcurrently(MultiCallerInlinerNode reader) {
     throw new Unreachable();
   }

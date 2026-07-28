@@ -208,8 +208,9 @@ public class AppInfo implements DexDefinitionSupplier {
   }
 
   public final DexClass definitionForWithoutExistenceAssert(DexType type) {
-    return contextIndependentDefinitionForWithResolutionResult(type)
-        .toSingleClassWithProgramOverLibrary();
+    assert checkIfObsolete();
+    assert type.isClassType() : "Cannot lookup definition for type: " + type;
+    return syntheticItems.definitionForWithoutExistenceAssert(type, app);
   }
 
   public final boolean hasDefinitionForWithoutExistenceAssert(DexType type) {

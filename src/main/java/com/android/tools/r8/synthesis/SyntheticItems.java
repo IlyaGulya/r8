@@ -479,6 +479,25 @@ public class SyntheticItems {
     return app.contextIndependentDefinitionForWithResolutionResult(type);
   }
 
+  public DexClass definitionForWithoutExistenceAssert(DexType type, DexApplication app) {
+    ProgramOrClasspathClass programOrClasspathClassNotOnLibrary =
+        app.definitionForProgramOrClasspathClassNotOnLibrary(type);
+    if (programOrClasspathClassNotOnLibrary != null) {
+      assert !isPendingSynthetic(type);
+      return programOrClasspathClassNotOnLibrary.asDexClass();
+    }
+    SyntheticDefinition<?, ?, ?> item = pending.definitions.get(type);
+    if (item != null) {
+      DexClass clazz = item.getHolder();
+      assert clazz.isProgramClass() == item.isProgramDefinition();
+      assert clazz.isClasspathClass() == item.isClasspathDefinition();
+      assert app.definitionFor(type) == null || item.getKind().isMayOverridesNonProgramType()
+          : "Pending synthetic definition also present in the active program: " + type;
+      return clazz;
+    }
+    return app.definitionFor(type);
+  }
+
   public boolean isFinalized() {
     return state == State.FINALIZED;
   }

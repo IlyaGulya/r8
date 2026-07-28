@@ -259,20 +259,20 @@ public class DexDistributionRefinement {
 
   private boolean cannotFit(VirtualFile file, ClassItems items) {
     int remainingMethods = VirtualFile.MAX_ENTRIES - file.getTransaction().getNumberOfMethods();
-    for (DexMethod method : items.methods) {
-      if (file.indexedItems.methods.getInt(method) == 0 && --remainingMethods < 0) {
+    for (int i = 0; i < items.methodsEnd; i++) {
+      if (file.indexedItems.methods.getInt(items.capacityItems[i]) == 0 && --remainingMethods < 0) {
         return true;
       }
     }
     int remainingTypes = VirtualFile.MAX_ENTRIES - file.getTransaction().getNumberOfTypes();
-    for (DexType type : items.types) {
-      if (file.indexedItems.types.getInt(type) == 0 && --remainingTypes < 0) {
+    for (int i = items.methodsEnd; i < items.typesEnd; i++) {
+      if (file.indexedItems.types.getInt(items.capacityItems[i]) == 0 && --remainingTypes < 0) {
         return true;
       }
     }
     int remainingFields = VirtualFile.MAX_ENTRIES - file.getTransaction().getNumberOfFields();
-    for (DexField field : items.fields) {
-      if (file.indexedItems.fields.getInt(field) == 0 && --remainingFields < 0) {
+    for (int i = items.typesEnd; i < items.capacityItems.length; i++) {
+      if (file.indexedItems.fields.getInt(items.capacityItems[i]) == 0 && --remainingFields < 0) {
         return true;
       }
     }
@@ -402,26 +402,38 @@ public class DexDistributionRefinement {
     }
 
     public ClassItems getItems() {
-      return new ClassItems(
-          items,
-          fields.toArray(DexField[]::new),
-          methods.toArray(DexMethod[]::new),
-          types.toArray(DexType[]::new));
+      DexItem[] capacityItems = new DexItem[methods.size() + types.size() + fields.size()];
+      int offset = 0;
+      for (int i = 0; i < methods.size(); i++) {
+        capacityItems[offset++] = methods.get(i);
+      }
+      int methodsEnd = offset;
+      for (int i = 0; i < types.size(); i++) {
+        capacityItems[offset++] = types.get(i);
+      }
+      int typesEnd = offset;
+      for (int i = 0; i < fields.size(); i++) {
+        capacityItems[offset++] = fields.get(i);
+      }
+      assert offset == capacityItems.length;
+      return new ClassItems(items, capacityItems, methodsEnd, typesEnd);
     }
   }
 
   private static class ClassItems {
 
     private final Set<DexItem> all;
-    private final DexField[] fields;
-    private final DexMethod[] methods;
-    private final DexType[] types;
+    // Methods, types and fields are stored in contiguous ranges to keep capacity checks branch-free
+    // without allocating three arrays per class.
+    private final DexItem[] capacityItems;
+    private final int methodsEnd;
+    private final int typesEnd;
 
-    private ClassItems(Set<DexItem> all, DexField[] fields, DexMethod[] methods, DexType[] types) {
+    private ClassItems(Set<DexItem> all, DexItem[] capacityItems, int methodsEnd, int typesEnd) {
       this.all = all;
-      this.fields = fields;
-      this.methods = methods;
-      this.types = types;
+      this.capacityItems = capacityItems;
+      this.methodsEnd = methodsEnd;
+      this.typesEnd = typesEnd;
     }
   }
 

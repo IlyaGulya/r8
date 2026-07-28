@@ -63,6 +63,8 @@ import java.util.stream.Collectors;
 
 public class DexItemFactory {
 
+  private static final AtomicInteger NEXT_FACTORY_IDENTITY = new AtomicInteger();
+
   public static final String throwableDescriptorString = "Ljava/lang/Throwable;";
   public static final String dalvikAnnotationSignatureString = "Ldalvik/annotation/Signature;";
   public static final String recordTagDescriptorString = "Lcom/android/tools/r8/RecordTag;";
@@ -106,6 +108,7 @@ public class DexItemFactory {
   private Map<DexString, DexType> types = new ConcurrentHashMap<>();
   private Map<DexString, DexType> committedTypes = new HashMap<>();
   // Dense identifiers for data-oriented lookup tables keyed by canonical types.
+  private final int factoryIdentity = NEXT_FACTORY_IDENTITY.getAndIncrement();
   private final AtomicInteger nextTypeId = new AtomicInteger();
 
   private Map<DexField, DexField> fields = new ConcurrentHashMap<>();
@@ -3611,7 +3614,7 @@ public class DexItemFactory {
     }
     if (descriptor.getFirstByteAsChar() != '[') {
       return types.computeIfAbsent(
-          descriptor, key -> new DexType(key, nextTypeId.getAndIncrement()));
+          descriptor, key -> new DexType(key, nextTypeId.getAndIncrement(), factoryIdentity));
     }
     DexType pending = types.get(descriptor);
     if (pending != null) {
@@ -3619,7 +3622,8 @@ public class DexItemFactory {
     }
     DexType elementType = createType(descriptor.toArrayElementDescriptor(this));
     return types.computeIfAbsent(
-        descriptor, key -> new DexArrayType(key, elementType, nextTypeId.getAndIncrement()));
+        descriptor,
+        key -> new DexArrayType(key, elementType, nextTypeId.getAndIncrement(), factoryIdentity));
   }
 
   public DexType createType(String descriptor) {

@@ -63,20 +63,26 @@ public class DexType extends DexReference implements NamingLensComparable<DexTyp
 
   public final DexString descriptor;
   private final int factoryId;
+  private final int factoryIdentity;
   private String toStringCache = null;
 
   DexType(DexString descriptor) {
-    this(descriptor, NO_FACTORY_ID);
+    this(descriptor, NO_FACTORY_ID, NO_FACTORY_ID);
   }
 
-  DexType(DexString descriptor, int factoryId) {
+  DexType(DexString descriptor, int factoryId, int factoryIdentity) {
     assert !descriptor.toString().contains(".") : "Malformed descriptor: " + descriptor;
     this.descriptor = descriptor;
     this.factoryId = factoryId;
+    this.factoryIdentity = factoryIdentity;
   }
 
-  int getFactoryId() {
+  public int getFactoryId() {
     return factoryId;
+  }
+
+  public int getFactoryIdentity() {
+    return factoryIdentity;
   }
 
   public ClassReference asClassReference() {

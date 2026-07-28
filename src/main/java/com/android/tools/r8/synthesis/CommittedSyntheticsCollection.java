@@ -35,6 +35,11 @@ import java.util.function.Consumer;
  */
 public class CommittedSyntheticsCollection {
 
+  private static final int METHOD_BIT = 0;
+  private static final int CLASS_BIT = 1;
+  private static final int NO_FACTORY_ID = -1;
+  private static final long TYPE_BITS = 0b11L;
+
   static class Builder {
     private final CommittedSyntheticsCollection parent;
     private Map<DexType, List<SyntheticProgramClassReference>> classes = null;
@@ -168,6 +173,11 @@ public class CommittedSyntheticsCollection {
   /** Set of synthetic types that were present in the input. */
   public final ImmutableSet<DexType> syntheticInputs;
 
+  /** Two factory-indexed membership bits per type: method followed by class. */
+  private final long[] membership;
+
+  private final int membershipFactoryIdentity;
+
   public CommittedSyntheticsCollection(
       ImmutableMap<DexType, List<SyntheticMethodReference>> methods,
       ImmutableMap<DexType, List<SyntheticProgramClassReference>> classes,
@@ -177,7 +187,78 @@ public class CommittedSyntheticsCollection {
     this.classes = classes;
     this.globalContexts = globalContexts;
     this.syntheticInputs = syntheticInputs;
+    FactoryMembership factoryMembership = createMembership(methods, classes);
+    this.membership = factoryMembership.bits;
+    this.membershipFactoryIdentity = factoryMembership.factoryIdentity;
     assert verifySyntheticInputsSubsetOfSynthetics();
+  }
+
+  private static class FactoryMembership {
+    private final int factoryIdentity;
+    private final long[] bits;
+
+    private FactoryMembership(int factoryIdentity, long[] bits) {
+      this.factoryIdentity = factoryIdentity;
+      this.bits = bits;
+    }
+  }
+
+  private static FactoryMembership createMembership(
+      Map<DexType, List<SyntheticMethodReference>> methods,
+      Map<DexType, List<SyntheticProgramClassReference>> classes) {
+    int factoryIdentity = NO_FACTORY_ID;
+    int maxFactoryId = -1;
+    for (DexType type : methods.keySet()) {
+      if (factoryIdentity == NO_FACTORY_ID) {
+        factoryIdentity = type.getFactoryIdentity();
+      } else if (factoryIdentity != type.getFactoryIdentity()) {
+        return new FactoryMembership(NO_FACTORY_ID, new long[0]);
+      }
+      maxFactoryId = Math.max(maxFactoryId, type.getFactoryId());
+    }
+    for (DexType type : classes.keySet()) {
+      if (factoryIdentity == NO_FACTORY_ID) {
+        factoryIdentity = type.getFactoryIdentity();
+      } else if (factoryIdentity != type.getFactoryIdentity()) {
+        return new FactoryMembership(NO_FACTORY_ID, new long[0]);
+      }
+      maxFactoryId = Math.max(maxFactoryId, type.getFactoryId());
+    }
+    if (maxFactoryId < 0) {
+      return new FactoryMembership(factoryIdentity, new long[0]);
+    }
+    long[] membership = new long[((maxFactoryId + 1) * 2 + Long.SIZE - 1) / Long.SIZE];
+    methods.keySet().forEach(type -> setMembershipBit(membership, type, METHOD_BIT));
+    classes.keySet().forEach(type -> setMembershipBit(membership, type, CLASS_BIT));
+    return new FactoryMembership(factoryIdentity, membership);
+  }
+
+  private static void setMembershipBit(long[] membership, DexType type, int kindBit) {
+    int factoryId = type.getFactoryId();
+    if (factoryId >= 0) {
+      int bitIndex = factoryId * 2 + kindBit;
+      membership[bitIndex / Long.SIZE] |= 1L << bitIndex;
+    }
+  }
+
+  private boolean hasMembershipBit(DexType type, int kindBit) {
+    int factoryId = type.getFactoryId();
+    if (factoryId < 0 || type.getFactoryIdentity() != membershipFactoryIdentity) {
+      return kindBit == METHOD_BIT ? methods.containsKey(type) : classes.containsKey(type);
+    }
+    int bitIndex = factoryId * 2 + kindBit;
+    int wordIndex = bitIndex / Long.SIZE;
+    return wordIndex < membership.length && (membership[wordIndex] & (1L << bitIndex)) != 0;
+  }
+
+  private boolean hasAnyMembershipBit(DexType type) {
+    int factoryId = type.getFactoryId();
+    if (factoryId < 0 || type.getFactoryIdentity() != membershipFactoryIdentity) {
+      return methods.containsKey(type) || classes.containsKey(type);
+    }
+    int bitIndex = factoryId * 2;
+    int wordIndex = bitIndex / Long.SIZE;
+    return wordIndex < membership.length && (membership[wordIndex] & (TYPE_BITS << bitIndex)) != 0;
   }
 
   public CommittedSyntheticsCollection merge(
@@ -238,18 +319,20 @@ public class CommittedSyntheticsCollection {
   }
 
   public boolean containsMethod(DexType type) {
-    return methods.containsKey(type);
+    return hasMembershipBit(type, METHOD_BIT);
   }
 
   public boolean containsType(DexType type) {
-    return containsMethod(type) || classes.containsKey(type);
+    return hasAnyMembershipBit(type);
   }
 
   @SuppressWarnings("ReferenceEquality")
   boolean containsTypeOfKind(DexType type, SyntheticKind kind) {
-    List<SyntheticProgramClassReference> synthetics = classes.get(type);
+    List<SyntheticProgramClassReference> synthetics =
+        hasMembershipBit(type, CLASS_BIT) ? classes.get(type) : null;
     if (synthetics == null) {
-      List<SyntheticMethodReference> syntheticMethodReferences = methods.get(type);
+      List<SyntheticMethodReference> syntheticMethodReferences =
+          hasMembershipBit(type, METHOD_BIT) ? methods.get(type) : null;
       if (syntheticMethodReferences == null) {
         return false;
       }
@@ -316,7 +399,8 @@ public class CommittedSyntheticsCollection {
 
   public Iterable<SyntheticReference<?, ?, ?>> getItems(DexType type) {
     return Iterables.concat(
-        classes.getOrDefault(type, emptyList()), methods.getOrDefault(type, emptyList()));
+        hasMembershipBit(type, CLASS_BIT) ? classes.get(type) : emptyList(),
+        hasMembershipBit(type, METHOD_BIT) ? methods.get(type) : emptyList());
   }
 
   public void forEachSyntheticInput(Consumer<DexType> fn) {

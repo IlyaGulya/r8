@@ -12,11 +12,11 @@ public class DexArrayType extends DexType {
   private final int dimensions;
 
   public DexArrayType(DexString descriptor, DexType elementType) {
-    this(descriptor, elementType, NO_FACTORY_ID);
+    this(descriptor, elementType, NO_FACTORY_ID, NO_FACTORY_ID);
   }
 
-  DexArrayType(DexString descriptor, DexType elementType, int factoryId) {
-    super(descriptor, factoryId);
+  DexArrayType(DexString descriptor, DexType elementType, int factoryId, int factoryIdentity) {
+    super(descriptor, factoryId, factoryIdentity);
     this.baseType = elementType.getBaseType();
     this.elementType = elementType;
     this.dimensions = getArrayTypeDimensions(descriptor);

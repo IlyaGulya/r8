@@ -36,6 +36,11 @@ public class TypeElementFactory {
 
   public ReferenceTypeElement createReferenceTypeElement(
       DexType type, Nullability nullability, AppView<?> appView) {
+    // Keep the common cache-hit path read-only. The compute below only needs to coordinate misses.
+    ReferenceTypeElement existing = referenceTypes.get(type);
+    if (existing != null) {
+      return existing.getOrCreateVariant(nullability);
+    }
     // Class case:
     // If two concurrent threads will try to create the same class-type the concurrent hash map will
     // synchronize on the type in .computeIfAbsent and only a single class type is created.
@@ -52,10 +57,6 @@ public class TypeElementFactory {
     //      ArrayTypeElement is created per level therefore holds inductively.
     TypeElement memberType = null;
     if (type.isArrayType()) {
-      ReferenceTypeElement existing = referenceTypes.get(type);
-      if (existing != null) {
-        return existing.getOrCreateVariant(nullability);
-      }
       memberType =
           TypeElement.fromDexType(
               type.getArrayElementType(), Nullability.maybeNull(), appView, true);
@@ -98,6 +99,11 @@ public class TypeElementFactory {
 
   public InterfaceCollection getOrComputeLeastUpperBoundOfImplementedInterfaces(
       DexType type, AppView<? extends AppInfoWithClassHierarchy> appView) {
+    // Keep the common cache-hit path read-only. The compute below only needs to coordinate misses.
+    InterfaceCollection existing = classTypeInterfaces.get(type);
+    if (existing != null) {
+      return existing;
+    }
     return classTypeInterfaces.computeIfAbsent(
         type,
         t -> {

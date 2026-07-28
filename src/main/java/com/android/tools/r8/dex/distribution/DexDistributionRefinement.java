@@ -27,7 +27,9 @@ import com.android.tools.r8.utils.ThreadUtils;
 import com.android.tools.r8.utils.timing.Timing;
 import com.google.common.base.Predicate;
 import it.unimi.dsi.fastutil.objects.Reference2IntMap;
+import it.unimi.dsi.fastutil.objects.Reference2IntOpenHashMap;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
@@ -47,6 +49,12 @@ public class DexDistributionRefinement {
   private final boolean enableContainerDex;
   private final LinkedHashSet<VirtualFile> files;
   private final LensCodeRewriterUtils rewriter;
+  // The cost model only needs to know if an item is present in each file. For small partitions,
+  // represent this as a bit mask indexed by a dense, refinement-local item ID. This replaces a
+  // reference-map probe for every item/target-file pair with sequential int-array reads.
+  private final Map<VirtualFile, Integer> fileIndices;
+  private final Reference2IntOpenHashMap<DexItem> itemIds;
+  private final int[] itemFileMemberships;
 
   // Must be concurrent since we collect concurrently.
   private final Map<String, DexString> shortyCache = new ConcurrentHashMap<>();
@@ -66,6 +74,77 @@ public class DexDistributionRefinement {
     this.files = new LinkedHashSet<>(filesSubjectToRefinement);
     this.rewriter = new LensCodeRewriterUtils(appView, true);
     initialize();
+    // Keep the original reference-count lookup for partitions that do not fit in a positive int
+    // bit mask.
+    if (files.size() <= Integer.SIZE - 1) {
+      fileIndices = new IdentityHashMap<>(files.size());
+      ItemFileMembership itemFileMembership = createItemFileMembership();
+      itemIds = itemFileMembership.itemIds;
+      itemFileMemberships = itemFileMembership.memberships;
+    } else {
+      fileIndices = null;
+      itemIds = null;
+      itemFileMemberships = null;
+    }
+  }
+
+  private ItemFileMembership createItemFileMembership() {
+    int itemFileEdges = 0;
+    for (VirtualFile file : files) {
+      itemFileEdges += file.indexedItems.callSites.size();
+      itemFileEdges += file.indexedItems.fields.size();
+      itemFileEdges += file.indexedItems.methods.size();
+      itemFileEdges += file.indexedItems.methodHandles.size();
+      itemFileEdges += file.indexedItems.protos.size();
+      itemFileEdges += file.indexedItems.strings.size();
+      itemFileEdges += file.indexedItems.types.size();
+    }
+    Reference2IntOpenHashMap<DexItem> itemIds = new Reference2IntOpenHashMap<>(itemFileEdges);
+    itemIds.defaultReturnValue(-1);
+    int[] memberships = new int[itemFileEdges];
+    int fileIndex = 0;
+    for (VirtualFile file : files) {
+      fileIndices.put(file, fileIndex);
+      int fileBit = 1 << fileIndex;
+      addFileMembership(itemIds, memberships, file.indexedItems.callSites, fileBit);
+      addFileMembership(itemIds, memberships, file.indexedItems.fields, fileBit);
+      addFileMembership(itemIds, memberships, file.indexedItems.methods, fileBit);
+      addFileMembership(itemIds, memberships, file.indexedItems.methodHandles, fileBit);
+      addFileMembership(itemIds, memberships, file.indexedItems.protos, fileBit);
+      addFileMembership(itemIds, memberships, file.indexedItems.strings, fileBit);
+      addFileMembership(itemIds, memberships, file.indexedItems.types, fileBit);
+      fileIndex++;
+    }
+    return new ItemFileMembership(itemIds, Arrays.copyOf(memberships, itemIds.size()));
+  }
+
+  private static <T extends DexItem> void addFileMembership(
+      Reference2IntOpenHashMap<DexItem> itemIds,
+      int[] memberships,
+      Reference2IntMap<T> items,
+      int fileBit) {
+    for (Reference2IntMap.Entry<T> entry : items.reference2IntEntrySet()) {
+      if (entry.getIntValue() != 0) {
+        DexItem item = entry.getKey();
+        int itemId = itemIds.getInt(item);
+        if (itemId < 0) {
+          itemId = itemIds.size();
+          itemIds.put(item, itemId);
+        }
+        memberships[itemId] |= fileBit;
+      }
+    }
+  }
+
+  private static class ItemFileMembership {
+
+    private final Reference2IntOpenHashMap<DexItem> itemIds;
+    private final int[] memberships;
+
+    private ItemFileMembership(Reference2IntOpenHashMap<DexItem> itemIds, int[] memberships) {
+      this.itemIds = itemIds;
+      this.memberships = memberships;
+    }
   }
 
   public static void run(
@@ -202,6 +281,9 @@ public class DexDistributionRefinement {
       VirtualFile sourceFile, ClassItems items) {
     int estimatedSavingsFromRemovalInBytes =
         getNumberOfItemsWithReferenceCount(items.all, sourceFile, 1);
+    int[] presentItemsByFile =
+        itemFileMemberships != null ? computePresentItemsByFile(items) : null;
+    int numberOfItems = presentItemsByFile != null ? items.membershipItemIds.length : 0;
 
     // TODO(b/473427453): To improve build speed, consider if we can return null here if if the
     //  estimated savings are small compared to the number of items in the class (i.e., the class
@@ -213,12 +295,30 @@ public class DexDistributionRefinement {
       if (targetFile == sourceFile || cannotFit(targetFile, items)) {
         continue;
       }
-      int estimatedCostInBytes = getNumberOfItemsWithReferenceCount(items.all, targetFile, 0);
+      int estimatedCostInBytes =
+          presentItemsByFile != null
+              ? numberOfItems - presentItemsByFile[fileIndices.get(targetFile)]
+              : getNumberOfItemsWithReferenceCount(items.all, targetFile, 0);
       if (estimatedCostInBytes < estimatedSavingsFromRemovalInBytes) {
         targetFiles.add(new Pair<>(targetFile, estimatedCostInBytes));
       }
     }
     return targetFiles;
+  }
+
+  private int[] computePresentItemsByFile(ClassItems items) {
+    int[] presentItemsByFile = new int[fileIndices.size()];
+    for (int itemId : items.membershipItemIds) {
+      int membership = itemFileMemberships[itemId];
+      assert membership != 0;
+      // Iterate only the files containing the item instead of probing every target file.
+      while (membership != 0) {
+        int fileIndex = Integer.numberOfTrailingZeros(membership);
+        presentItemsByFile[fileIndex]++;
+        membership &= membership - 1;
+      }
+    }
+    return presentItemsByFile;
   }
 
   private int getNumberOfItemsWithReferenceCount(
@@ -291,40 +391,56 @@ public class DexDistributionRefinement {
       }
       sourceFile.indexedItems.classes.remove(clazz);
       targetFile.indexedItems.classes.add(clazz);
+      int sourceFileBit = getFileBit(sourceFile);
+      int targetFileBit = getFileBit(targetFile);
       for (DexItem item : items.all) {
-        adjustReferenceCount(sourceFile, item, -1);
-        adjustReferenceCount(targetFile, item, 1);
+        adjustReferenceCount(sourceFile, sourceFileBit, item, -1);
+        adjustReferenceCount(targetFile, targetFileBit, item, 1);
       }
       return true;
     }
     return false;
   }
 
-  private void adjustReferenceCount(VirtualFile file, DexItem item, int change) {
+  private int getFileBit(VirtualFile file) {
+    return itemFileMemberships != null ? 1 << fileIndices.get(file) : 0;
+  }
+
+  private void adjustReferenceCount(VirtualFile file, int fileBit, DexItem item, int change) {
+    int newCount;
     if (item instanceof DexCallSite) {
-      adjustReferenceCount(file.indexedItems.callSites, (DexCallSite) item, change);
+      newCount = adjustReferenceCount(file.indexedItems.callSites, (DexCallSite) item, change);
     } else if (item instanceof DexField) {
-      adjustReferenceCount(file.indexedItems.fields, (DexField) item, change);
+      newCount = adjustReferenceCount(file.indexedItems.fields, (DexField) item, change);
     } else if (item instanceof DexMethod) {
-      adjustReferenceCount(file.indexedItems.methods, (DexMethod) item, change);
+      newCount = adjustReferenceCount(file.indexedItems.methods, (DexMethod) item, change);
     } else if (item instanceof DexMethodHandle) {
-      adjustReferenceCount(file.indexedItems.methodHandles, (DexMethodHandle) item, change);
+      newCount =
+          adjustReferenceCount(file.indexedItems.methodHandles, (DexMethodHandle) item, change);
     } else if (item instanceof DexProto) {
-      adjustReferenceCount(file.indexedItems.protos, (DexProto) item, change);
+      newCount = adjustReferenceCount(file.indexedItems.protos, (DexProto) item, change);
     } else if (item instanceof DexString) {
-      adjustReferenceCount(file.indexedItems.strings, (DexString) item, change);
+      newCount = adjustReferenceCount(file.indexedItems.strings, (DexString) item, change);
     } else if (item instanceof DexType) {
-      adjustReferenceCount(file.indexedItems.types, (DexType) item, change);
+      newCount = adjustReferenceCount(file.indexedItems.types, (DexType) item, change);
     } else {
       assert false;
+      return;
+    }
+    if (itemFileMemberships != null && newCount != IndexedItemTransaction.NO_REF_COUNT) {
+      int itemId = itemIds.getInt(item);
+      assert itemId >= 0;
+      int membership = itemFileMemberships[itemId];
+      // Moves are applied single threaded after all concurrent cost computations have completed.
+      itemFileMemberships[itemId] = newCount == 0 ? membership & ~fileBit : membership | fileBit;
     }
   }
 
-  private <T> void adjustReferenceCount(Reference2IntMap<T> items, T item, int change) {
+  private <T> int adjustReferenceCount(Reference2IntMap<T> items, T item, int change) {
     int count = items.containsKey(item) ? items.getInt(item) : 0;
     if (count == IndexedItemTransaction.NO_REF_COUNT) {
       // Checksum or marker.
-      return;
+      return count;
     }
     int newCount = count + change;
     assert newCount >= 0;
@@ -333,6 +449,7 @@ public class DexDistributionRefinement {
     } else {
       items.put(item, newCount);
     }
+    return newCount;
   }
 
   private class ItemCollector implements IndexedItemCollection {
@@ -416,7 +533,23 @@ public class DexDistributionRefinement {
         capacityItems[offset++] = fields.get(i);
       }
       assert offset == capacityItems.length;
-      return new ClassItems(items, capacityItems, methodsEnd, typesEnd);
+      int[] membershipItemIds = null;
+      if (itemIds != null) {
+        membershipItemIds = new int[items.size()];
+        offset = 0;
+        for (DexItem item : items) {
+          if (enableContainerDex && item instanceof DexString) {
+            continue;
+          }
+          int itemId = itemIds.getInt(item);
+          assert itemId >= 0;
+          membershipItemIds[offset++] = itemId;
+        }
+        if (offset < membershipItemIds.length) {
+          membershipItemIds = Arrays.copyOf(membershipItemIds, offset);
+        }
+      }
+      return new ClassItems(items, capacityItems, methodsEnd, typesEnd, membershipItemIds);
     }
   }
 
@@ -428,12 +561,19 @@ public class DexDistributionRefinement {
     private final DexItem[] capacityItems;
     private final int methodsEnd;
     private final int typesEnd;
+    private final int[] membershipItemIds;
 
-    private ClassItems(Set<DexItem> all, DexItem[] capacityItems, int methodsEnd, int typesEnd) {
+    private ClassItems(
+        Set<DexItem> all,
+        DexItem[] capacityItems,
+        int methodsEnd,
+        int typesEnd,
+        int[] membershipItemIds) {
       this.all = all;
       this.capacityItems = capacityItems;
       this.methodsEnd = methodsEnd;
       this.typesEnd = typesEnd;
+      this.membershipItemIds = membershipItemIds;
     }
   }
 

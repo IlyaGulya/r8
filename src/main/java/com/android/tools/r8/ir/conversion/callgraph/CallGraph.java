@@ -12,11 +12,11 @@ import com.android.tools.r8.shaking.AppInfoWithLiveness;
 import com.android.tools.r8.utils.InternalOptions;
 import com.android.tools.r8.utils.collections.ProgramMethodSet;
 import com.android.tools.r8.utils.collections.SortedProgramMethodSet;
-import com.google.common.collect.Sets;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -95,20 +95,20 @@ public class CallGraph extends CallGraphBase<Node> {
   }
 
   private ProgramMethodSet extractNodes(Predicate<Node> predicate, Consumer<Node> clean) {
-    ProgramMethodSet result =
-        InternalOptions.DETERMINISTIC_DEBUGGING
-            ? SortedProgramMethodSet.create()
-            : ProgramMethodSet.create();
-    Set<Node> removed = Sets.newIdentityHashSet();
+    List<Node> removed = new ArrayList<>();
     Iterator<Node> nodeIterator = nodes.values().iterator();
     while (nodeIterator.hasNext()) {
       Node node = nodeIterator.next();
       if (predicate.test(node)) {
-        result.add(node.getProgramMethod());
         nodeIterator.remove();
         removed.add(node);
       }
     }
+    ProgramMethodSet result =
+        InternalOptions.DETERMINISTIC_DEBUGGING
+            ? SortedProgramMethodSet.create()
+            : ProgramMethodSet.create(removed.size());
+    removed.forEach(node -> result.add(node.getProgramMethod()));
     removed.forEach(clean);
     assert !result.isEmpty();
     return result;

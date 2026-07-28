@@ -27,6 +27,7 @@ import com.android.tools.r8.utils.ThreadUtils;
 import com.android.tools.r8.utils.timing.Timing;
 import com.google.common.base.Predicate;
 import it.unimi.dsi.fastutil.objects.Reference2IntMap;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
@@ -55,7 +56,7 @@ public class DexDistributionRefinement {
   // removal.
   private final Map<VirtualFile, LinkedHashSet<DexProgramClass>>
       fileToClassesWithDeterministicOrder = new IdentityHashMap<>();
-  private final Map<DexProgramClass, Set<DexItem>> itemsByClass = new ConcurrentHashMap<>();
+  private final Map<DexProgramClass, ClassItems> itemsByClass = new ConcurrentHashMap<>();
 
   private DexDistributionRefinement(
       AppView<?> appView, VirtualFileCycler cycler, List<VirtualFile> filesSubjectToRefinement) {
@@ -152,7 +153,7 @@ public class DexDistributionRefinement {
         classesWithDeterministicOrder,
         alwaysTrue(),
         (clazz, threadTiming) -> {
-          Set<DexItem> items = itemsByClass.computeIfAbsent(clazz, this::collectItems);
+          ClassItems items = itemsByClass.computeIfAbsent(clazz, this::collectItems);
           PriorityQueue<Pair<VirtualFile, Integer>> targetFiles = findTargetFiles(file, items);
           if (!targetFiles.isEmpty()) {
             pendingMoveTasks.put(clazz, c -> moveClass(c, file, targetFiles, items));
@@ -191,16 +192,16 @@ public class DexDistributionRefinement {
     return changed;
   }
 
-  private Set<DexItem> collectItems(DexProgramClass clazz) {
+  private ClassItems collectItems(DexProgramClass clazz) {
     ItemCollector collector = new ItemCollector();
     clazz.collectIndexedItems(appView, collector, rewriter);
     return collector.getItems();
   }
 
   private PriorityQueue<Pair<VirtualFile, Integer>> findTargetFiles(
-      VirtualFile sourceFile, Set<DexItem> items) {
+      VirtualFile sourceFile, ClassItems items) {
     int estimatedSavingsFromRemovalInBytes =
-        getNumberOfItemsWithReferenceCount(items, sourceFile, 1);
+        getNumberOfItemsWithReferenceCount(items.all, sourceFile, 1);
 
     // TODO(b/473427453): To improve build speed, consider if we can return null here if if the
     //  estimated savings are small compared to the number of items in the class (i.e., the class
@@ -212,7 +213,7 @@ public class DexDistributionRefinement {
       if (targetFile == sourceFile || cannotFit(targetFile, items)) {
         continue;
       }
-      int estimatedCostInBytes = getNumberOfItemsWithReferenceCount(items, targetFile, 0);
+      int estimatedCostInBytes = getNumberOfItemsWithReferenceCount(items.all, targetFile, 0);
       if (estimatedCostInBytes < estimatedSavingsFromRemovalInBytes) {
         targetFiles.add(new Pair<>(targetFile, estimatedCostInBytes));
       }
@@ -256,31 +257,33 @@ public class DexDistributionRefinement {
     return 0;
   }
 
-  private boolean cannotFit(VirtualFile file, Set<DexItem> items) {
-    int newFields = 0;
-    int newMethods = 0;
-    int newTypes = 0;
-    for (DexItem item : items) {
-      if (getReferenceCount(item, file) == 0) {
-        if (item instanceof DexField) {
-          newFields++;
-        } else if (item instanceof DexMethod) {
-          newMethods++;
-        } else if (item instanceof DexType) {
-          newTypes++;
-        }
+  private boolean cannotFit(VirtualFile file, ClassItems items) {
+    int remainingMethods = VirtualFile.MAX_ENTRIES - file.getTransaction().getNumberOfMethods();
+    for (DexMethod method : items.methods) {
+      if (file.indexedItems.methods.getInt(method) == 0 && --remainingMethods < 0) {
+        return true;
       }
     }
-    return file.getTransaction().getNumberOfFields() + newFields > VirtualFile.MAX_ENTRIES
-        || file.getTransaction().getNumberOfMethods() + newMethods > VirtualFile.MAX_ENTRIES
-        || file.getTransaction().getNumberOfTypes() + newTypes > VirtualFile.MAX_ENTRIES;
+    int remainingTypes = VirtualFile.MAX_ENTRIES - file.getTransaction().getNumberOfTypes();
+    for (DexType type : items.types) {
+      if (file.indexedItems.types.getInt(type) == 0 && --remainingTypes < 0) {
+        return true;
+      }
+    }
+    int remainingFields = VirtualFile.MAX_ENTRIES - file.getTransaction().getNumberOfFields();
+    for (DexField field : items.fields) {
+      if (file.indexedItems.fields.getInt(field) == 0 && --remainingFields < 0) {
+        return true;
+      }
+    }
+    return remainingMethods < 0 || remainingTypes < 0 || remainingFields < 0;
   }
 
   private boolean moveClass(
       DexProgramClass clazz,
       VirtualFile sourceFile,
       PriorityQueue<Pair<VirtualFile, Integer>> targetFiles,
-      Set<DexItem> items) {
+      ClassItems items) {
     while (!targetFiles.isEmpty()) {
       VirtualFile targetFile = targetFiles.poll().getFirst();
       if (cannotFit(targetFile, items)) {
@@ -288,7 +291,7 @@ public class DexDistributionRefinement {
       }
       sourceFile.indexedItems.classes.remove(clazz);
       targetFile.indexedItems.classes.add(clazz);
-      for (DexItem item : items) {
+      for (DexItem item : items.all) {
         adjustReferenceCount(sourceFile, item, -1);
         adjustReferenceCount(targetFile, item, 1);
       }
@@ -335,6 +338,9 @@ public class DexDistributionRefinement {
   private class ItemCollector implements IndexedItemCollection {
 
     private final Set<DexItem> items = SetUtils.newIdentityHashSet();
+    private final List<DexField> fields = new ArrayList<>();
+    private final List<DexMethod> methods = new ArrayList<>();
+    private final List<DexType> types = new ArrayList<>();
 
     @Override
     public boolean addClass(DexProgramClass clazz) {
@@ -343,12 +349,20 @@ public class DexDistributionRefinement {
 
     @Override
     public boolean addField(DexField field) {
-      return items.add(field);
+      if (items.add(field)) {
+        fields.add(field);
+        return true;
+      }
+      return false;
     }
 
     @Override
     public boolean addMethod(DexMethod method) {
-      return items.add(method);
+      if (items.add(method)) {
+        methods.add(method);
+        return true;
+      }
+      return false;
     }
 
     @Override
@@ -370,7 +384,11 @@ public class DexDistributionRefinement {
 
     @Override
     public boolean addType(DexType type) {
-      return items.add(type);
+      if (items.add(type)) {
+        types.add(type);
+        return true;
+      }
+      return false;
     }
 
     @Override
@@ -383,8 +401,27 @@ public class DexDistributionRefinement {
       return items.add(methodHandle);
     }
 
-    public Set<DexItem> getItems() {
-      return items;
+    public ClassItems getItems() {
+      return new ClassItems(
+          items,
+          fields.toArray(DexField[]::new),
+          methods.toArray(DexMethod[]::new),
+          types.toArray(DexType[]::new));
+    }
+  }
+
+  private static class ClassItems {
+
+    private final Set<DexItem> all;
+    private final DexField[] fields;
+    private final DexMethod[] methods;
+    private final DexType[] types;
+
+    private ClassItems(Set<DexItem> all, DexField[] fields, DexMethod[] methods, DexType[] types) {
+      this.all = all;
+      this.fields = fields;
+      this.methods = methods;
+      this.types = types;
     }
   }
 

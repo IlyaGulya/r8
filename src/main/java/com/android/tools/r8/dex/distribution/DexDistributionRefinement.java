@@ -41,6 +41,9 @@ import java.util.concurrent.ExecutorService;
 
 public class DexDistributionRefinement {
 
+  private static final DexDistributionRefinementProfiler profiler =
+      DexDistributionRefinementProfiler.getIfEnabled();
+
   private final AppView<?> appView;
   private final VirtualFileCycler cycler;
   private final boolean enableContainerDex;
@@ -64,6 +67,9 @@ public class DexDistributionRefinement {
     this.enableContainerDex = appView.options().enableContainerDex();
     this.files = new LinkedHashSet<>(filesSubjectToRefinement);
     this.rewriter = new LensCodeRewriterUtils(appView, true);
+    if (profiler != null) {
+      profiler.recordPartition(files.size(), enableContainerDex);
+    }
     initialize();
   }
 
@@ -112,6 +118,9 @@ public class DexDistributionRefinement {
     // Run refinement.
     boolean hasEmptyFiles = false;
     for (int i = 0; i < appView.testing().classToDexDistributionRefinementPasses; i++) {
+      if (profiler != null) {
+        profiler.recordPass();
+      }
       boolean changed = false;
       timing.begin("Pass " + i);
       Iterator<VirtualFile> iterator = files.iterator();
@@ -144,6 +153,9 @@ public class DexDistributionRefinement {
     boolean changed = false;
     LinkedHashSet<DexProgramClass> classesWithDeterministicOrder =
         fileToClassesWithDeterministicOrder.get(file);
+    if (profiler != null) {
+      profiler.recordRefinedFile(classesWithDeterministicOrder.size());
+    }
 
     // Concurrently compute which classes to move where.
     timing.begin("Compute target files");
@@ -194,13 +206,18 @@ public class DexDistributionRefinement {
   private Set<DexItem> collectItems(DexProgramClass clazz) {
     ItemCollector collector = new ItemCollector();
     clazz.collectIndexedItems(appView, collector, rewriter);
-    return collector.getItems();
+    Set<DexItem> items = collector.getItems();
+    if (profiler != null) {
+      profiler.recordCollectedItems(items);
+    }
+    return items;
   }
 
   private PriorityQueue<Pair<VirtualFile, Integer>> findTargetFiles(
       VirtualFile sourceFile, Set<DexItem> items) {
     int estimatedSavingsFromRemovalInBytes =
-        getNumberOfItemsWithReferenceCount(items, sourceFile, 1);
+        getNumberOfItemsWithReferenceCount(
+            items, sourceFile, 1, DexDistributionRefinementProfiler.CountScanKind.SOURCE_SAVINGS);
 
     // TODO(b/473427453): To improve build speed, consider if we can return null here if if the
     //  estimated savings are small compared to the number of items in the class (i.e., the class
@@ -208,30 +225,50 @@ public class DexDistributionRefinement {
 
     PriorityQueue<Pair<VirtualFile, Integer>> targetFiles =
         new PriorityQueue<>(Comparator.comparingInt(Pair::getSecond));
+    int capacityRejections = 0;
+    int beneficialTargets = 0;
     for (VirtualFile targetFile : files) {
-      if (targetFile == sourceFile || cannotFit(targetFile, items)) {
+      if (targetFile == sourceFile) {
         continue;
       }
-      int estimatedCostInBytes = getNumberOfItemsWithReferenceCount(items, targetFile, 0);
+      if (cannotFit(targetFile, items, false)) {
+        capacityRejections++;
+        continue;
+      }
+      int estimatedCostInBytes =
+          getNumberOfItemsWithReferenceCount(
+              items, targetFile, 0, DexDistributionRefinementProfiler.CountScanKind.TARGET_COST);
       if (estimatedCostInBytes < estimatedSavingsFromRemovalInBytes) {
         targetFiles.add(new Pair<>(targetFile, estimatedCostInBytes));
+        beneficialTargets++;
       }
+    }
+    if (profiler != null) {
+      profiler.recordTargetSearch(files.size() - 1, capacityRejections, beneficialTargets);
     }
     return targetFiles;
   }
 
   private int getNumberOfItemsWithReferenceCount(
-      Set<DexItem> items, VirtualFile targetFile, int theReferenceCount) {
+      Set<DexItem> items,
+      VirtualFile targetFile,
+      int theReferenceCount,
+      DexDistributionRefinementProfiler.CountScanKind scanKind) {
     int result = 0;
+    int skippedStrings = 0;
     for (DexItem item : items) {
       if (enableContainerDex && item instanceof DexString) {
         // The container has a single DEX file, so don't include the cost/savings from moving
         // strings from one dex file to another.
+        skippedStrings++;
         continue;
       }
       if (getReferenceCount(item, targetFile) == theReferenceCount) {
         result++;
       }
+    }
+    if (profiler != null) {
+      profiler.recordCountScan(scanKind, items.size(), skippedStrings, result);
     }
     return result;
   }
@@ -256,24 +293,43 @@ public class DexDistributionRefinement {
     return 0;
   }
 
-  private boolean cannotFit(VirtualFile file, Set<DexItem> items) {
+  private boolean cannotFit(VirtualFile file, Set<DexItem> items, boolean revalidation) {
     int newFields = 0;
     int newMethods = 0;
     int newTypes = 0;
+    int itemIndex = 0;
+    int relevantItems = 0;
+    int firstOverflowAt = 0;
+    int existingFields = file.getTransaction().getNumberOfFields();
+    int existingMethods = file.getTransaction().getNumberOfMethods();
+    int existingTypes = file.getTransaction().getNumberOfTypes();
     for (DexItem item : items) {
+      itemIndex++;
       if (getReferenceCount(item, file) == 0) {
         if (item instanceof DexField) {
+          relevantItems++;
           newFields++;
         } else if (item instanceof DexMethod) {
+          relevantItems++;
           newMethods++;
         } else if (item instanceof DexType) {
+          relevantItems++;
           newTypes++;
         }
+      } else if (item instanceof DexField || item instanceof DexMethod || item instanceof DexType) {
+        relevantItems++;
+      }
+      if (firstOverflowAt == 0
+          && (existingFields + newFields > VirtualFile.MAX_ENTRIES
+              || existingMethods + newMethods > VirtualFile.MAX_ENTRIES
+              || existingTypes + newTypes > VirtualFile.MAX_ENTRIES)) {
+        firstOverflowAt = itemIndex;
       }
     }
-    return file.getTransaction().getNumberOfFields() + newFields > VirtualFile.MAX_ENTRIES
-        || file.getTransaction().getNumberOfMethods() + newMethods > VirtualFile.MAX_ENTRIES
-        || file.getTransaction().getNumberOfTypes() + newTypes > VirtualFile.MAX_ENTRIES;
+    if (profiler != null) {
+      profiler.recordCapacityScan(revalidation, items.size(), relevantItems, firstOverflowAt);
+    }
+    return firstOverflowAt != 0;
   }
 
   private boolean moveClass(
@@ -283,7 +339,7 @@ public class DexDistributionRefinement {
       Set<DexItem> items) {
     while (!targetFiles.isEmpty()) {
       VirtualFile targetFile = targetFiles.poll().getFirst();
-      if (cannotFit(targetFile, items)) {
+      if (cannotFit(targetFile, items, true)) {
         continue;
       }
       sourceFile.indexedItems.classes.remove(clazz);
@@ -292,7 +348,13 @@ public class DexDistributionRefinement {
         adjustReferenceCount(sourceFile, item, -1);
         adjustReferenceCount(targetFile, item, 1);
       }
+      if (profiler != null) {
+        profiler.recordMove(true);
+      }
       return true;
+    }
+    if (profiler != null) {
+      profiler.recordMove(false);
     }
     return false;
   }

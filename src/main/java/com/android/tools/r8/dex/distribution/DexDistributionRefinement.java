@@ -257,23 +257,30 @@ public class DexDistributionRefinement {
   }
 
   private boolean cannotFit(VirtualFile file, Set<DexItem> items) {
-    int newFields = 0;
-    int newMethods = 0;
-    int newTypes = 0;
+    int remainingTypes = VirtualFile.MAX_ENTRIES - file.getTransaction().getNumberOfTypes();
+    int remainingMethods = VirtualFile.MAX_ENTRIES - file.getTransaction().getNumberOfMethods();
+    int remainingFields = VirtualFile.MAX_ENTRIES - file.getTransaction().getNumberOfFields();
+    if (remainingTypes < 0 || remainingMethods < 0 || remainingFields < 0) {
+      return true;
+    }
     for (DexItem item : items) {
-      if (getReferenceCount(item, file) == 0) {
-        if (item instanceof DexField) {
-          newFields++;
-        } else if (item instanceof DexMethod) {
-          newMethods++;
-        } else if (item instanceof DexType) {
-          newTypes++;
+      // Capacity only depends on these three indexed-item kinds. Strings, protos, call sites and
+      // method handles do not need a reference-count lookup here.
+      if (item instanceof DexType) {
+        if (file.indexedItems.types.getInt(item) == 0 && --remainingTypes < 0) {
+          return true;
         }
+      } else if (item instanceof DexMethod) {
+        if (file.indexedItems.methods.getInt(item) == 0 && --remainingMethods < 0) {
+          return true;
+        }
+      } else if (item instanceof DexField
+          && file.indexedItems.fields.getInt(item) == 0
+          && --remainingFields < 0) {
+        return true;
       }
     }
-    return file.getTransaction().getNumberOfFields() + newFields > VirtualFile.MAX_ENTRIES
-        || file.getTransaction().getNumberOfMethods() + newMethods > VirtualFile.MAX_ENTRIES
-        || file.getTransaction().getNumberOfTypes() + newTypes > VirtualFile.MAX_ENTRIES;
+    return false;
   }
 
   private boolean moveClass(

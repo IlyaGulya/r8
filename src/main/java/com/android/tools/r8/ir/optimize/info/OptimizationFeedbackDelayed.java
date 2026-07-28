@@ -127,7 +127,7 @@ public class OptimizationFeedbackDelayed extends OptimizationFeedback {
 
   @Override
   public void markFieldCannotBeKept(DexEncodedField field) {
-    getFieldOptimizationInfoForUpdating(field).cannotBeKept();
+    getFieldOptimizationInfoForUpdating(field).markCannotBeKept();
   }
 
   @Override
@@ -172,7 +172,7 @@ public class OptimizationFeedbackDelayed extends OptimizationFeedback {
 
   @Override
   public void markMethodCannotBeKept(DexEncodedMethod method) {
-    getMethodOptimizationInfoForUpdating(method).cannotBeKept();
+    getMethodOptimizationInfoForUpdating(method).markCannotBeKept();
   }
 
   @Override

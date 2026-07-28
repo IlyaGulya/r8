@@ -55,6 +55,7 @@ public class DexDistributionRefinement {
   // removal.
   private final Map<VirtualFile, LinkedHashSet<DexProgramClass>>
       fileToClassesWithDeterministicOrder = new IdentityHashMap<>();
+  private final Map<DexProgramClass, Set<DexItem>> itemsByClass = new ConcurrentHashMap<>();
 
   private DexDistributionRefinement(
       AppView<?> appView, VirtualFileCycler cycler, List<VirtualFile> filesSubjectToRefinement) {
@@ -151,7 +152,7 @@ public class DexDistributionRefinement {
         classesWithDeterministicOrder,
         alwaysTrue(),
         (clazz, threadTiming) -> {
-          Set<DexItem> items = collectItems(clazz);
+          Set<DexItem> items = itemsByClass.computeIfAbsent(clazz, this::collectItems);
           PriorityQueue<Pair<VirtualFile, Integer>> targetFiles = findTargetFiles(file, items);
           if (!targetFiles.isEmpty()) {
             pendingMoveTasks.put(clazz, c -> moveClass(c, file, targetFiles, items));

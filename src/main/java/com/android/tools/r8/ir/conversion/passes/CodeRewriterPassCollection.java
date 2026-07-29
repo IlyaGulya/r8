@@ -11,6 +11,7 @@ import com.android.tools.r8.ir.code.IRCode;
 import com.android.tools.r8.ir.conversion.IRConverter;
 import com.android.tools.r8.ir.conversion.MethodProcessor;
 import com.android.tools.r8.ir.conversion.passes.result.CodeRewriterResult;
+import com.android.tools.r8.ir.conversion.passes.result.IRCodeInvalidation;
 import com.android.tools.r8.ir.optimize.ListIterationRewriter;
 import com.android.tools.r8.ir.optimize.RedundantFieldLoadAndStoreElimination;
 import com.android.tools.r8.ir.optimize.ServiceLoaderRewriter;
@@ -19,13 +20,38 @@ import com.android.tools.r8.ir.optimize.enums.EnumValueOptimizer;
 import com.android.tools.r8.ir.optimize.string.StringBuilderAppendOptimizer;
 import com.android.tools.r8.utils.ArrayUtils;
 import com.android.tools.r8.utils.InternalOptions;
-import com.android.tools.r8.utils.Pair;
 import com.android.tools.r8.utils.timing.Timing;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
 public class CodeRewriterPassCollection {
+
+  public static final class Result {
+
+    private final boolean hasChanged;
+    private final String previousMethodPrinting;
+    private final int invalidatedInvariants;
+
+    private Result(boolean hasChanged, String previousMethodPrinting, int invalidatedInvariants) {
+      assert IRCodeInvalidation.isValid(invalidatedInvariants);
+      this.hasChanged = hasChanged;
+      this.previousMethodPrinting = previousMethodPrinting;
+      this.invalidatedInvariants = invalidatedInvariants;
+    }
+
+    public boolean hasChanged() {
+      return hasChanged;
+    }
+
+    public String getPreviousMethodPrinting() {
+      return previousMethodPrinting;
+    }
+
+    public int getInvalidatedInvariants() {
+      return invalidatedInvariants;
+    }
+  }
 
   private final List<CodeRewriterPass<?>> passes;
 
@@ -81,7 +107,7 @@ public class CodeRewriterPassCollection {
         ArrayUtils.filterNulls(passes, CodeRewriterPass.EMPTY_ARRAY));
   }
 
-  public Pair<Boolean, String> run(
+  public Result run(
       IRCode code,
       MethodProcessor methodProcessor,
       MethodProcessingContext methodProcessingContext,
@@ -89,15 +115,17 @@ public class CodeRewriterPassCollection {
       String previousMethodPrinting,
       InternalOptions options) {
     boolean changed = false;
+    int invalidatedInvariants = IRCodeInvalidation.NONE;
     for (CodeRewriterPass<?> pass : passes) {
       // TODO(b/286345542): Run printMethod after each run.
       CodeRewriterResult result = pass.run(code, methodProcessor, methodProcessingContext, timing);
       changed |= result.hasChanged().isTrue();
+      invalidatedInvariants |= result.invalidatedInvariants();
       previousMethodPrinting =
           IRConverter.printMethodIR(
               code, "IR after " + pass.getRewriterId(), previousMethodPrinting, options);
     }
-    return new Pair<>(changed, previousMethodPrinting);
+    return new Result(changed, previousMethodPrinting, invalidatedInvariants);
   }
 
   public void enableListIterationRewriter(AppView<?> appView) {

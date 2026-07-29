@@ -41,6 +41,7 @@ import com.android.tools.r8.ir.code.ValueType;
 import com.android.tools.r8.ir.code.Xor;
 import com.android.tools.r8.ir.conversion.MethodProcessor;
 import com.android.tools.r8.ir.conversion.passes.result.CodeRewriterResult;
+import com.android.tools.r8.ir.conversion.passes.result.IRCodeInvalidation;
 import com.android.tools.r8.ir.optimize.AffectedValues;
 import com.android.tools.r8.ir.optimize.controlflow.SwitchCaseAnalyzer;
 import com.android.tools.r8.utils.BooleanUtils;
@@ -196,6 +197,15 @@ public class BranchSimplifier extends CodeRewriterPass<AppInfo> {
     public OptionalBool hasChanged() {
       assert !anyAffectedValues || anySimplifications;
       return OptionalBool.of(anySimplifications());
+    }
+
+    @Override
+    public int invalidatedInvariants() {
+      return anySimplifications
+          ? IRCodeInvalidation.INSTRUCTIONS
+              | IRCodeInvalidation.SSA_VALUES
+              | IRCodeInvalidation.CFG_TOPOLOGY
+          : IRCodeInvalidation.NONE;
     }
 
     public ControlFlowSimplificationResult combine(ControlFlowSimplificationResult ifResult) {

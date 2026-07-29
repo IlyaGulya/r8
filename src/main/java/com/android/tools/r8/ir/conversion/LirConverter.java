@@ -17,6 +17,7 @@ import com.android.tools.r8.ir.code.IRCode;
 import com.android.tools.r8.ir.conversion.passes.AdaptClassStringsRewriter;
 import com.android.tools.r8.ir.conversion.passes.AssumeRemover;
 import com.android.tools.r8.ir.conversion.passes.CodeRewriterPassCollection;
+import com.android.tools.r8.ir.conversion.passes.CodeRewriterPassCollection.Result;
 import com.android.tools.r8.ir.conversion.passes.ConstResourceNumberRemover;
 import com.android.tools.r8.ir.conversion.passes.ConstResourceNumberRewriter;
 import com.android.tools.r8.ir.conversion.passes.DexConstantOptimizer;
@@ -41,7 +42,6 @@ import com.android.tools.r8.shaking.AppInfoWithLiveness;
 import com.android.tools.r8.synthesis.SyntheticItems.GlobalSyntheticsStrategy;
 import com.android.tools.r8.utils.InternalOptions;
 import com.android.tools.r8.utils.ObjectUtils;
-import com.android.tools.r8.utils.Pair;
 import com.android.tools.r8.utils.ThreadUtils;
 import com.android.tools.r8.utils.ThrowingAction;
 import com.android.tools.r8.utils.timing.Timing;
@@ -258,11 +258,11 @@ public class LirConverter {
     IRCode irCode = method.buildIR(appView, MethodConversionOptions.forPostLirPhase(appView));
     assert irCode.verifyInvokeInterface(appView);
     String previous = IRConverter.printMethodIR(irCode, "IR from LIR", "", appView.options());
-    Pair<Boolean, String> result =
+    Result result =
         codeRewriterPassCollection.run(
             irCode, null, null, threadTiming, previous, appView.options());
-    boolean changed = result.getFirst();
-    previous = result.getSecond();
+    boolean changed = result.hasChanged();
+    previous = result.getPreviousMethodPrinting();
     if (appView.options().isGeneratingDex()) {
       ConstantCanonicalizer constantCanonicalizer =
           new ConstantCanonicalizer(appView, method, irCode);

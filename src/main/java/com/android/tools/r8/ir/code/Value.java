@@ -246,7 +246,7 @@ public class Value implements Comparable<Value>, InstructionOrValue {
   public Value getAliasedValue(
       AliasedValueConfiguration configuration, Predicate<Value> stoppingCriterion) {
     assert stoppingCriterion != null;
-    Set<Value> visited = Sets.newIdentityHashSet();
+    Set<Value> visited = null;
     Value lastAliasedValue;
     Value aliasedValue = this;
     do {
@@ -262,7 +262,8 @@ public class Value implements Comparable<Value>, InstructionOrValue {
         aliasedValue = configuration.getAliasForOutValue(definitionOfAliasedValue);
 
         // There shouldn't be a cycle.
-        assert visited.add(aliasedValue);
+        assert (visited == null ? (visited = Sets.newIdentityHashSet()) : visited)
+            .add(aliasedValue);
       }
     } while (aliasedValue != lastAliasedValue);
     assert aliasedValue.isPhi() || !aliasedValue.definition.isAssume();

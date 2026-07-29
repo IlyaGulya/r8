@@ -50,6 +50,7 @@ public class CallGraph extends CallGraphBase<Node> {
   }
 
   public static CallGraph createForTesting(Collection<Node> nodes) {
+    Node.prepareForDeterministicTraversal(nodes);
     return new CallGraph(
         nodes.stream()
             .collect(

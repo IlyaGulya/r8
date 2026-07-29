@@ -343,7 +343,7 @@ public class CycleEliminator<N extends CycleEliminatorNode<N>> {
     if (predecessor != null) {
       if (node.getMethod().isClassInitializer() && node.hasCaller(predecessor)) {
         clinitCallStack.push(node);
-      } else if (predecessor.getWritersWithDeterministicOrder().contains(node)) {
+      } else if (predecessor.hasWriter(node)) {
         writerStack.push(node);
       }
     }

@@ -5,28 +5,30 @@
 package com.android.tools.r8.ir.conversion.callgraph;
 
 import com.android.tools.r8.graph.ProgramMethod;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.Set;
-import java.util.TreeSet;
 
 public class Node extends NodeBase<Node> implements Comparable<Node>, CycleEliminatorNode<Node> {
 
   public static Node[] EMPTY_ARRAY = {};
 
   private int numberOfCallSites = 0;
+  private int callGraphOrder = -1;
 
   // Outgoing calls from this method.
-  private final Set<Node> callees = new TreeSet<>();
+  private final CallGraphNodeSet callees = new CallGraphNodeSet();
 
   // Incoming calls to this method.
-  private final Set<Node> callers = new TreeSet<>();
+  private final CallGraphNodeSet callers = new CallGraphNodeSet();
 
   // Incoming field read edges to this method (i.e., the set of methods that read a field written
   // by the current method).
-  private final Set<Node> readers = new TreeSet<>();
+  private final CallGraphNodeSet readers = new CallGraphNodeSet();
 
   // Outgoing field read edges from this method (i.e., the set of methods that write a field read
   // by the current method).
-  private final Set<Node> writers = new TreeSet<>();
+  private final CallGraphNodeSet writers = new CallGraphNodeSet();
 
   public Node(ProgramMethod method) {
     super(method);
@@ -144,21 +146,50 @@ public class Node extends NodeBase<Node> implements Comparable<Node>, CycleElimi
   }
 
   public Set<Node> getCallersWithDeterministicOrder() {
-    return callers;
+    return callers.getWithDeterministicOrder();
   }
 
   @Override
   public Set<Node> getCalleesWithDeterministicOrder() {
-    return callees;
+    return callees.getWithDeterministicOrder();
   }
 
   public Set<Node> getReadersWithDeterministicOrder() {
-    return readers;
+    return readers.getWithDeterministicOrder();
   }
 
   @Override
   public Set<Node> getWritersWithDeterministicOrder() {
-    return writers;
+    return writers.getWithDeterministicOrder();
+  }
+
+  int getCallGraphOrder() {
+    return callGraphOrder;
+  }
+
+  void setCallGraphOrder(int callGraphOrder) {
+    assert this.callGraphOrder < 0;
+    this.callGraphOrder = callGraphOrder;
+  }
+
+  void freezeCallGraphEdges() {
+    assert callGraphOrder >= 0;
+    callees.freeze();
+    callers.freeze();
+    readers.freeze();
+    writers.freeze();
+  }
+
+  static Node[] prepareForDeterministicTraversal(Collection<Node> nodes) {
+    Node[] orderedNodes = nodes.toArray(EMPTY_ARRAY);
+    Arrays.sort(orderedNodes);
+    for (int index = 0; index < orderedNodes.length; index++) {
+      orderedNodes[index].setCallGraphOrder(index);
+    }
+    for (Node node : orderedNodes) {
+      node.freezeCallGraphEdges();
+    }
+    return orderedNodes;
   }
 
   public int getNumberOfCallSites() {

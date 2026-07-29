@@ -7,9 +7,9 @@ import com.android.tools.r8.graph.AppView;
 import com.android.tools.r8.graph.ProgramMethod;
 import com.android.tools.r8.shaking.AppInfoWithLiveness;
 import com.android.tools.r8.utils.timing.Timing;
-import com.google.common.collect.Sets;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
-import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 
@@ -31,9 +31,10 @@ abstract class IRProcessingCallGraphBuilderBase extends CallGraphBuilderBase<Nod
     appView.withGeneratedMessageLiteBuilderShrinker(
         shrinker -> shrinker.preprocessCallGraphBeforeCycleElimination(nodes));
 
+    Node[] orderedNodes = Node.prepareForDeterministicTraversal(nodes.values());
+
     timing.begin("Cycle elimination");
-    // Sort the nodes for deterministic cycle elimination.
-    Set<Node> nodesWithDeterministicOrder = Sets.newTreeSet(nodes.values());
+    Collection<Node> nodesWithDeterministicOrder = Arrays.asList(orderedNodes);
     CycleEliminator cycleEliminator = new CycleEliminator();
     cycleEliminator.breakCycles(nodesWithDeterministicOrder);
     timing.end();

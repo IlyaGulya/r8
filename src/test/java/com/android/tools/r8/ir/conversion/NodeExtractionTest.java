@@ -6,6 +6,7 @@ package com.android.tools.r8.ir.conversion;
 import static org.hamcrest.CoreMatchers.hasItem;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import com.android.tools.r8.graph.DexEncodedMethod;
@@ -17,6 +18,8 @@ import java.util.TreeSet;
 import org.junit.Test;
 
 public class NodeExtractionTest extends CallGraphTestBase {
+
+  private static final int LARGE_DEGREE = 70;
 
   // Note that building a test graph is intentionally repeated to avoid race conditions and/or
   // non-deterministic test results due to cycle elimination.
@@ -206,6 +209,52 @@ public class NodeExtractionTest extends CallGraphTestBase {
     assertEquals(2, wave.size());
     assertThat(wave, hasItem(n3.getMethod()));
     assertThat(wave, hasItem(n4.getMethod()));
+    assertTrue(callGraph.isEmpty());
+  }
+
+  @Test
+  public void testExtractLeaves_largeCalleeSet() {
+    Node caller = createNode("caller");
+    Node middleCallee = null;
+    Set<Node> nodes = new TreeSet<>();
+    nodes.add(caller);
+    for (int index = 0; index < LARGE_DEGREE; index++) {
+      Node callee = createNode("callee" + index);
+      callee.addCallerConcurrently(caller);
+      nodes.add(callee);
+      if (index == LARGE_DEGREE / 2) {
+        middleCallee = callee;
+      }
+    }
+
+    CallGraph callGraph = CallGraph.createForTesting(nodes);
+    middleCallee.removeCaller(caller);
+    assertFalse(caller.hasCallee(middleCallee));
+    assertEquals(LARGE_DEGREE, callGraph.extractLeaves().size());
+    assertEquals(1, callGraph.extractLeaves().size());
+    assertTrue(callGraph.isEmpty());
+  }
+
+  @Test
+  public void testExtractRoots_largeCallerSet() {
+    Node callee = createNode("callee");
+    Node middleCaller = null;
+    Set<Node> nodes = new TreeSet<>();
+    nodes.add(callee);
+    for (int index = 0; index < LARGE_DEGREE; index++) {
+      Node caller = createNode("caller" + index);
+      callee.addCallerConcurrently(caller);
+      nodes.add(caller);
+      if (index == LARGE_DEGREE / 2) {
+        middleCaller = caller;
+      }
+    }
+
+    CallGraph callGraph = CallGraph.createForTesting(nodes);
+    callee.removeCaller(middleCaller);
+    assertFalse(callee.hasCaller(middleCaller));
+    assertEquals(LARGE_DEGREE, callGraph.extractRoots().size());
+    assertEquals(1, callGraph.extractRoots().size());
     assertTrue(callGraph.isEmpty());
   }
 }

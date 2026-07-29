@@ -4,46 +4,57 @@
 
 package com.android.tools.r8.ir.code;
 
-import static com.android.tools.r8.utils.MapUtils.ignoreKey;
-
 import com.android.tools.r8.graph.AppView;
 import com.android.tools.r8.ir.optimize.DeadCodeRemover.DeadInstructionResult;
-import com.android.tools.r8.utils.BooleanBox;
-import com.android.tools.r8.utils.MapUtils;
-import com.android.tools.r8.utils.WorkList;
 import com.google.common.collect.Iterables;
-import com.google.common.collect.Sets;
-import java.util.Collections;
-import java.util.IdentityHashMap;
-import java.util.Iterator;
-import java.util.LinkedHashSet;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
+import java.util.Arrays;
 
 public class ValueIsDeadAnalysis {
 
-  private enum ValueIsDeadResult {
-    DEAD,
-    NOT_DEAD;
-
-    boolean isDead() {
-      return this == DEAD;
-    }
-
-    boolean isNotDead() {
-      return this == NOT_DEAD;
-    }
-  }
+  private static final byte UNKNOWN = 0;
+  private static final byte DEAD = 1;
+  private static final byte NOT_DEAD = 2;
+  private static final int INITIAL_BUFFER_CAPACITY = 8;
 
   private final AppView<?> appView;
   private final IRCode code;
 
-  private final Map<Value, ValueIsDeadResult> analysisCache = new IdentityHashMap<>();
+  private byte[] analysisCache;
+  private int[] seenEpochs;
+  private int[] requiredEpochs;
+  private int[] firstDependentEdgeEpochs;
+  private int[] firstDependentEdges;
+  private int[] remainingDependencies;
+  private Value[] valuesByNumber;
+
+  private int[] workQueue = new int[INITIAL_BUFFER_CAPACITY];
+  private int workQueueHead;
+  private int workQueueTail;
+
+  private int[] requiredValues = new int[INITIAL_BUFFER_CAPACITY];
+  private int requiredValuesSize;
+
+  private int[] propagationQueue = new int[INITIAL_BUFFER_CAPACITY];
+
+  private int[] dependentEdgeTargets = new int[INITIAL_BUFFER_CAPACITY];
+  private int[] nextDependentEdges = new int[INITIAL_BUFFER_CAPACITY];
+  private int dependentEdgesSize;
+
+  private int currentEpoch;
+  private int currentRequiredEpoch;
+  private boolean foundCycle;
 
   public ValueIsDeadAnalysis(AppView<?> appView, IRCode code) {
     this.appView = appView;
     this.code = code;
+    int valueCapacity = Math.max(code.valueNumberGenerator.peek(), 1);
+    analysisCache = new byte[valueCapacity];
+    seenEpochs = new int[valueCapacity];
+    requiredEpochs = new int[valueCapacity];
+    firstDependentEdgeEpochs = new int[valueCapacity];
+    firstDependentEdges = new int[valueCapacity];
+    remainingDependencies = new int[valueCapacity];
+    valuesByNumber = new Value[valueCapacity];
   }
 
   public boolean isDead(Value value) {
@@ -54,27 +65,21 @@ public class ValueIsDeadAnalysis {
     // Create an is-dead dependence graph. If the deadness of value v depends on value u being dead,
     // a directed edge [v -> u] is added to the graph.
     //
-    // This graph serves two purposes:
-    // 1) If the analysis finds that `u` is *not* dead, then using the graph we can find all the
-    //    values whose deadness depend (directly or indirectly) on `u` being dead, and mark them as
-    //    being *not* dead in the analysis cache.
-    // 2) If the analysis finds that `u` *is* dead, we can remove the node from the dependence graph
-    //    (as it is necessarily a leaf), and repeatedly mark direct and indirect predecessors of `u`
-    //    that have now become leaves as being dead in the analysis cache.
-    WorkList<Value> worklist = WorkList.newIdentityWorkList(value);
-    BooleanBox foundCycle = new BooleanBox();
-    Value notDeadWitness = findNotDeadWitness(worklist, foundCycle);
-    boolean isDead = Objects.isNull(notDeadWitness);
+    // Only reverse edges and the number of unresolved dependencies are needed. If `u` is not dead,
+    // reverse edges find all dependent values. If `u` is dead, decrementing each dependent's
+    // unresolved count identifies the new leaves.
+    startQuery(value);
+    boolean isDead = findNotDeadWitness();
     if (isDead) {
-      if (foundCycle.isTrue()) {
-        for (Value deadValue : worklist.getSeenSet()) {
-          recordValueIsDead(deadValue);
+      if (foundCycle) {
+        for (int index = 0; index < workQueueTail; index++) {
+          recordValueIsDead(workQueue[index]);
         }
       } else {
-        assert worklist.getSeenSet().stream()
-            .allMatch(deadValue -> analysisCache.get(deadValue) == ValueIsDeadResult.DEAD);
+        assert verifySeenValuesAreDead();
       }
     }
+    clearQueryValueReferences();
     return isDead;
   }
 
@@ -82,184 +87,253 @@ public class ValueIsDeadAnalysis {
     return Iterables.any(block.getPhis(), this::isDead);
   }
 
-  private Value findNotDeadWitness(WorkList<Value> worklist, BooleanBox foundCycle) {
-    DependenceGraph dependenceGraph = new DependenceGraph();
-    while (worklist.hasNext()) {
-      Value value = worklist.next();
+  private boolean findNotDeadWitness() {
+    while (workQueueHead < workQueueTail) {
+      int valueNumber = workQueue[workQueueHead++];
+      Value value = valuesByNumber[valueNumber];
 
       // The first time we visit a value we have not yet added any outgoing edges to the dependence
       // graph.
-      assert dependenceGraph.isLeaf(value);
+      assert remainingDependencies[valueNumber] == 0;
 
       // Lookup if we have already analyzed the deadness of this value.
-      ValueIsDeadResult cacheResult = analysisCache.get(value);
-      if (cacheResult != null) {
+      byte cacheResult = analysisCache[valueNumber];
+      if (cacheResult != UNKNOWN) {
         // If it is dead, then continue the search for a non-dead dependent. Otherwise this value is
         // a witness that the analysis failed.
-        if (cacheResult.isDead()) {
+        if (cacheResult == DEAD) {
           continue;
         } else {
-          recordDependentsAreNotDead(value, dependenceGraph);
-          return value;
+          assert cacheResult == NOT_DEAD;
+          recordDependentsAreNotDead(valueNumber);
+          return false;
         }
       }
 
       // If the value has debug users we cannot eliminate it since it represents a value in a local
       // variable that should be visible in the debugger.
       if (value.hasDebugUsers()) {
-        recordValueAndDependentsAreNotDead(value, dependenceGraph);
-        return value;
+        recordValueAndDependentsAreNotDead(valueNumber);
+        return false;
       }
 
-      Set<Value> valuesRequiredToBeDead = new LinkedHashSet<>(value.uniquePhiUsers());
+      startRequiredValues();
+      value.uniquePhiUsers().forEach(this::addRequiredValue);
       for (Instruction instruction : value.uniqueUsers()) {
         DeadInstructionResult result = instruction.canBeDeadCode(appView, code);
         if (result.isNotDead()) {
-          recordValueAndDependentsAreNotDead(value, dependenceGraph);
-          return value;
+          recordValueAndDependentsAreNotDead(valueNumber);
+          return false;
         }
         if (result.isMaybeDead()) {
-          result.getValuesRequiredToBeDead().forEach(valuesRequiredToBeDead::add);
+          result.getValuesRequiredToBeDead().forEach(this::addRequiredValue);
         }
         if (instruction.hasOutValue()) {
-          valuesRequiredToBeDead.add(instruction.outValue());
+          addRequiredValue(instruction.outValue());
         }
       }
 
-      Iterator<Value> valuesRequiredToBeDeadIterator = valuesRequiredToBeDead.iterator();
-      while (valuesRequiredToBeDeadIterator.hasNext()) {
-        Value valueRequiredToBeDead = valuesRequiredToBeDeadIterator.next();
-        if (hasProvenThatValueIsNotDead(valueRequiredToBeDead)) {
-          recordValueAndDependentsAreNotDead(value, dependenceGraph);
-          return value;
+      int retainedRequiredValues = 0;
+      for (int index = 0; index < requiredValuesSize; index++) {
+        int requiredValueNumber = requiredValues[index];
+        if (hasProvenThatValueIsNotDead(requiredValueNumber)) {
+          recordValueAndDependentsAreNotDead(valueNumber);
+          return false;
         }
-        if (!needsToProveThatValueIsDead(value, valueRequiredToBeDead)) {
-          valuesRequiredToBeDeadIterator.remove();
+        if (needsToProveThatValueIsDead(valueNumber, requiredValueNumber)) {
+          requiredValues[retainedRequiredValues++] = requiredValueNumber;
         }
       }
+      requiredValuesSize = retainedRequiredValues;
 
-      if (valuesRequiredToBeDead.isEmpty()) {
+      if (requiredValuesSize == 0) {
         // We have now proven that this value is dead.
-        recordValueIsDeadAndPropagateToDependents(value, dependenceGraph);
+        recordValueIsDeadAndPropagateToDependents(valueNumber);
       } else {
         // Record the current value as a dependent of each value required to be dead.
-        for (Value valueRequiredToBeDead : valuesRequiredToBeDead) {
-          dependenceGraph.addDependenceEdge(value, valueRequiredToBeDead);
-          foundCycle.or(worklist.isSeen(valueRequiredToBeDead));
+        remainingDependencies[valueNumber] = requiredValuesSize;
+        for (int index = 0; index < requiredValuesSize; index++) {
+          int requiredValueNumber = requiredValues[index];
+          addDependenceEdge(valueNumber, requiredValueNumber);
+          foundCycle |= seenEpochs[requiredValueNumber] == currentEpoch;
         }
 
         // Continue the analysis of the dependents.
-        worklist.addIfNotSeen(valuesRequiredToBeDead);
+        for (int index = 0; index < requiredValuesSize; index++) {
+          addToWorkQueueIfNotSeen(requiredValues[index]);
+        }
       }
     }
-    return null;
+    return true;
   }
 
-  private boolean hasProvenThatValueIsNotDead(Value valueRequiredToBeDead) {
-    return analysisCache.get(valueRequiredToBeDead) == ValueIsDeadResult.NOT_DEAD;
+  private boolean hasProvenThatValueIsNotDead(int valueRequiredToBeDead) {
+    return analysisCache[valueRequiredToBeDead] == NOT_DEAD;
   }
 
-  private boolean needsToProveThatValueIsDead(Value value, Value valueRequiredToBeDead) {
+  private boolean needsToProveThatValueIsDead(int value, int valueRequiredToBeDead) {
     // No need to record that the deadness of a values relies on its own removal.
     assert !hasProvenThatValueIsNotDead(valueRequiredToBeDead);
-    return valueRequiredToBeDead != value && !analysisCache.containsKey(valueRequiredToBeDead);
+    return valueRequiredToBeDead != value && analysisCache[valueRequiredToBeDead] == UNKNOWN;
   }
 
-  private void recordValueIsDeadAndPropagateToDependents(
-      Value value, DependenceGraph dependenceGraph) {
-    WorkList<Value> worklist = WorkList.newIdentityWorkList(value);
-    while (worklist.hasNext()) {
-      Value current = worklist.next();
+  private void recordValueIsDeadAndPropagateToDependents(int value) {
+    int propagationQueueHead = 0;
+    int propagationQueueTail = 1;
+    propagationQueue[0] = value;
+    while (propagationQueueHead < propagationQueueTail) {
+      int current = propagationQueue[propagationQueueHead++];
+      assert remainingDependencies[current] == 0;
       recordValueIsDead(current);
 
-      // This value is now proven to be dead, thus there is no need to keep track of its successors.
-      dependenceGraph.unlinkSuccessors(current);
-
       // Continue processing of new leaves.
-      for (Value dependent : dependenceGraph.removeLeaf(current)) {
-        if (dependenceGraph.isLeaf(dependent)) {
-          worklist.addIfNotSeen(dependent);
+      for (int edge = getFirstDependentEdge(current); edge >= 0; edge = nextDependentEdges[edge]) {
+        int dependent = dependentEdgeTargets[edge];
+        int remaining = --remainingDependencies[dependent];
+        assert remaining >= 0;
+        if (remaining == 0) {
+          propagationQueue = ensureCapacity(propagationQueue, propagationQueueTail + 1);
+          propagationQueue[propagationQueueTail++] = dependent;
         }
       }
     }
   }
 
-  private void recordValueIsDead(Value value) {
-    ValueIsDeadResult existingResult = analysisCache.put(value, ValueIsDeadResult.DEAD);
-    assert existingResult == null || existingResult.isDead();
+  private void recordValueIsDead(int value) {
+    byte existingResult = analysisCache[value];
+    analysisCache[value] = DEAD;
+    assert existingResult == UNKNOWN || existingResult == DEAD;
   }
 
-  private void recordValueAndDependentsAreNotDead(Value value, DependenceGraph dependenceGraph) {
-    recordValueIsNotDead(value, dependenceGraph);
-    recordDependentsAreNotDead(value, dependenceGraph);
+  private void recordValueAndDependentsAreNotDead(int value) {
+    recordValueIsNotDead(value);
+    recordDependentsAreNotDead(value);
   }
 
-  private void recordValueIsNotDead(Value value, DependenceGraph dependenceGraph) {
-    // This value is now proven to be dead, thus there is no need to keep track of its successors.
-    dependenceGraph.unlinkSuccessors(value);
-    ValueIsDeadResult existingResult = analysisCache.put(value, ValueIsDeadResult.NOT_DEAD);
-    assert existingResult == null || existingResult.isNotDead();
+  private void recordValueIsNotDead(int value) {
+    byte existingResult = analysisCache[value];
+    analysisCache[value] = NOT_DEAD;
+    assert existingResult == UNKNOWN || existingResult == NOT_DEAD;
   }
 
-  private void recordDependentsAreNotDead(Value value, DependenceGraph dependenceGraph) {
-    WorkList<Value> worklist = WorkList.newIdentityWorkList(value);
-    while (worklist.hasNext()) {
-      Value current = worklist.next();
-      for (Value dependent : dependenceGraph.removeLeaf(current)) {
-        recordValueIsNotDead(dependent, dependenceGraph);
-        worklist.addIfNotSeen(dependent);
-      }
-    }
-  }
-
-  private static class DependenceGraph {
-
-    private final Map<Value, Set<Value>> successors = new IdentityHashMap<>();
-    private final Map<Value, Set<Value>> predecessors = new IdentityHashMap<>();
-
-    /**
-     * Records that the removal of {@param value} depends on the removal of {@param
-     * valueRequiredToBeDead} by adding an edge from {@param value} to {@param
-     * valueRequiredToBeDead} in this graph.
-     */
-    void addDependenceEdge(Value value, Value valueRequiredToBeDead) {
-      successors
-          .computeIfAbsent(value, ignoreKey(Sets::newIdentityHashSet))
-          .add(valueRequiredToBeDead);
-      predecessors
-          .computeIfAbsent(valueRequiredToBeDead, ignoreKey(Sets::newIdentityHashSet))
-          .add(value);
-    }
-
-    Set<Value> removeLeaf(Value value) {
-      assert isLeaf(value);
-      Set<Value> dependents = MapUtils.removeOrDefault(predecessors, value, Collections.emptySet());
-      for (Value dependent : dependents) {
-        Set<Value> dependentSuccessors = successors.get(dependent);
-        boolean removed = dependentSuccessors.remove(value);
-        assert removed;
-        if (dependentSuccessors.isEmpty()) {
-          successors.remove(dependent);
-        }
-      }
-      return dependents;
-    }
-
-    void unlinkSuccessors(Value value) {
-      Set<Value> valueSuccessors =
-          MapUtils.removeOrDefault(successors, value, Collections.emptySet());
-      for (Value successor : valueSuccessors) {
-        Set<Value> successorPredecessors = predecessors.get(successor);
-        boolean removed = successorPredecessors.remove(value);
-        assert removed;
-        if (successorPredecessors.isEmpty()) {
-          predecessors.remove(successor);
+  private void recordDependentsAreNotDead(int value) {
+    int propagationQueueHead = 0;
+    int propagationQueueTail = 1;
+    propagationQueue[0] = value;
+    while (propagationQueueHead < propagationQueueTail) {
+      int current = propagationQueue[propagationQueueHead++];
+      for (int edge = getFirstDependentEdge(current); edge >= 0; edge = nextDependentEdges[edge]) {
+        int dependent = dependentEdgeTargets[edge];
+        if (analysisCache[dependent] != NOT_DEAD) {
+          recordValueIsNotDead(dependent);
+          propagationQueue = ensureCapacity(propagationQueue, propagationQueueTail + 1);
+          propagationQueue[propagationQueueTail++] = dependent;
         }
       }
     }
+  }
 
-    boolean isLeaf(Value value) {
-      return !successors.containsKey(value);
+  private void startQuery(Value value) {
+    if (++currentEpoch == 0) {
+      Arrays.fill(seenEpochs, 0);
+      Arrays.fill(firstDependentEdgeEpochs, 0);
+      currentEpoch = 1;
+    }
+    workQueueHead = 0;
+    workQueueTail = 0;
+    dependentEdgesSize = 0;
+    foundCycle = false;
+    int valueNumber = getValueNumber(value);
+    valuesByNumber[valueNumber] = value;
+    addToWorkQueueIfNotSeen(valueNumber);
+  }
+
+  private void startRequiredValues() {
+    if (++currentRequiredEpoch == 0) {
+      Arrays.fill(requiredEpochs, 0);
+      currentRequiredEpoch = 1;
+    }
+    requiredValuesSize = 0;
+  }
+
+  private void addRequiredValue(Value value) {
+    int valueNumber = getValueNumber(value);
+    valuesByNumber[valueNumber] = value;
+    if (requiredEpochs[valueNumber] != currentRequiredEpoch) {
+      requiredEpochs[valueNumber] = currentRequiredEpoch;
+      requiredValues = ensureCapacity(requiredValues, requiredValuesSize + 1);
+      requiredValues[requiredValuesSize++] = valueNumber;
+    }
+  }
+
+  private void addToWorkQueueIfNotSeen(int valueNumber) {
+    if (seenEpochs[valueNumber] != currentEpoch) {
+      seenEpochs[valueNumber] = currentEpoch;
+      remainingDependencies[valueNumber] = 0;
+      workQueue = ensureCapacity(workQueue, workQueueTail + 1);
+      workQueue[workQueueTail++] = valueNumber;
+    }
+  }
+
+  /**
+   * Records that the removal of {@param value} depends on the removal of {@param
+   * valueRequiredToBeDead} by adding a reverse edge from {@param valueRequiredToBeDead} to {@param
+   * value}.
+   */
+  private void addDependenceEdge(int value, int valueRequiredToBeDead) {
+    int firstDependentEdge = getFirstDependentEdge(valueRequiredToBeDead);
+    dependentEdgeTargets = ensureCapacity(dependentEdgeTargets, dependentEdgesSize + 1);
+    nextDependentEdges = ensureCapacity(nextDependentEdges, dependentEdgesSize + 1);
+    dependentEdgeTargets[dependentEdgesSize] = value;
+    nextDependentEdges[dependentEdgesSize] = firstDependentEdge;
+    firstDependentEdgeEpochs[valueRequiredToBeDead] = currentEpoch;
+    firstDependentEdges[valueRequiredToBeDead] = dependentEdgesSize++;
+  }
+
+  private int getFirstDependentEdge(int value) {
+    return firstDependentEdgeEpochs[value] == currentEpoch ? firstDependentEdges[value] : -1;
+  }
+
+  private int getValueNumber(Value value) {
+    int valueNumber = value.getNumber();
+    assert valueNumber >= 0;
+    ensureValueCapacity(valueNumber + 1);
+    return valueNumber;
+  }
+
+  private void ensureValueCapacity(int minimumCapacity) {
+    if (minimumCapacity <= analysisCache.length) {
+      return;
+    }
+    int newCapacity = Math.max(minimumCapacity, analysisCache.length * 2);
+    analysisCache = Arrays.copyOf(analysisCache, newCapacity);
+    seenEpochs = Arrays.copyOf(seenEpochs, newCapacity);
+    requiredEpochs = Arrays.copyOf(requiredEpochs, newCapacity);
+    firstDependentEdgeEpochs = Arrays.copyOf(firstDependentEdgeEpochs, newCapacity);
+    firstDependentEdges = Arrays.copyOf(firstDependentEdges, newCapacity);
+    remainingDependencies = Arrays.copyOf(remainingDependencies, newCapacity);
+    valuesByNumber = Arrays.copyOf(valuesByNumber, newCapacity);
+  }
+
+  private static int[] ensureCapacity(int[] array, int minimumCapacity) {
+    return minimumCapacity <= array.length
+        ? array
+        : Arrays.copyOf(array, Math.max(minimumCapacity, array.length * 2));
+  }
+
+  private boolean verifySeenValuesAreDead() {
+    for (int index = 0; index < workQueueTail; index++) {
+      assert analysisCache[workQueue[index]] == DEAD;
+    }
+    return true;
+  }
+
+  private void clearQueryValueReferences() {
+    for (int index = 0; index < workQueueTail; index++) {
+      valuesByNumber[workQueue[index]] = null;
+    }
+    for (int index = 0; index < requiredValuesSize; index++) {
+      valuesByNumber[requiredValues[index]] = null;
     }
   }
 }

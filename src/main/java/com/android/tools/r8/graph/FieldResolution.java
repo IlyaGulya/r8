@@ -27,15 +27,14 @@ public class FieldResolution {
     FieldResolutionResult.Builder builder = FieldResolutionResult.builder();
     definitionFor
         .contextIndependentDefinitionForWithResolutionResult(type)
-        .forEachClassResolutionResult(
-            clazz -> resolveFieldOn(clazz, field, clazz, SetUtils.newIdentityHashSet(8), builder));
+        .forEachClassResolutionResult(clazz -> resolveFieldOn(clazz, field, clazz, null, builder));
     return builder.buildOrIfEmpty(FieldResolutionResult.failure());
   }
 
   public FieldResolutionResult resolveFieldOn(DexClass holder, DexField field) {
     assert holder != null;
     FieldResolutionResult.Builder builder = FieldResolutionResult.builder();
-    resolveFieldOn(holder, field, holder, SetUtils.newIdentityHashSet(8), builder);
+    resolveFieldOn(holder, field, holder, null, builder);
     return builder.buildOrIfEmpty(FieldResolutionResult.failure());
   }
 
@@ -54,14 +53,23 @@ public class FieldResolution {
       return;
     }
     // Step 2: Apply recursively to direct superinterfaces. First match succeeds.
-    FieldResolutionResult result =
-        resolveFieldOnDirectInterfaces(initialResolutionHolder, holder, field, visitedInterfaces);
+    Set<DexType> visitedInterfacesForSuper = visitedInterfaces;
+    FieldResolutionResult result = null;
+    if (!holder.interfaces.isEmpty()) {
+      if (visitedInterfacesForSuper == null) {
+        visitedInterfacesForSuper = SetUtils.newIdentityHashSet(8);
+      }
+      result =
+          resolveFieldOnDirectInterfaces(
+              initialResolutionHolder, holder, field, visitedInterfacesForSuper);
+    }
     if (result != null) {
       builder.addResolutionResult(result);
       return;
     }
     // Step 3: Apply recursively to superclass.
     if (holder.superType != null) {
+      Set<DexType> finalVisitedInterfaces = visitedInterfacesForSuper;
       definitionFor
           .contextIndependentDefinitionForWithResolutionResult(holder.superType)
           .forEachClassResolutionResult(
@@ -72,7 +80,7 @@ public class FieldResolution {
                   return;
                 }
                 resolveFieldOn(
-                    superClass, field, initialResolutionHolder, visitedInterfaces, builder);
+                    superClass, field, initialResolutionHolder, finalVisitedInterfaces, builder);
               });
     } else {
       builder.addResolutionResult(FieldResolutionResult.failure());

@@ -4,14 +4,22 @@
 
 package com.android.tools.r8.ir.conversion.callgraph;
 
+import com.android.tools.r8.graph.DexType;
 import com.android.tools.r8.graph.ProgramMethod;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.Set;
 
 public class Node extends NodeBase<Node> implements Comparable<Node>, CycleEliminatorNode<Node> {
 
   public static Node[] EMPTY_ARRAY = {};
+  private static final Comparator<Node> METHOD_SIGNATURE_COMPARATOR =
+      (first, second) ->
+          first
+              .getProgramMethod()
+              .getReference()
+              .compareSignatureTo(second.getProgramMethod().getReference());
 
   private int numberOfCallSites = 0;
   private int callGraphOrder = -1;
@@ -182,7 +190,7 @@ public class Node extends NodeBase<Node> implements Comparable<Node>, CycleElimi
 
   static Node[] prepareForDeterministicTraversal(Collection<Node> nodes) {
     Node[] orderedNodes = nodes.toArray(EMPTY_ARRAY);
-    Arrays.sort(orderedNodes);
+    sortByMethodReference(orderedNodes);
     for (int index = 0; index < orderedNodes.length; index++) {
       orderedNodes[index].setCallGraphOrder(index);
     }
@@ -190,6 +198,84 @@ public class Node extends NodeBase<Node> implements Comparable<Node>, CycleElimi
       node.freezeCallGraphEdges();
     }
     return orderedNodes;
+  }
+
+  private static void sortByMethodReference(Node[] nodes) {
+    if (nodes.length < 2) {
+      return;
+    }
+    DexType firstHolder = nodes[0].getProgramMethod().getHolderType();
+    int factoryIdentity = firstHolder.getFactoryIdentity();
+    int maxFactoryId = firstHolder.getFactoryId();
+    if (factoryIdentity < 0 || maxFactoryId < 0) {
+      Arrays.sort(nodes);
+      return;
+    }
+    for (int index = 1; index < nodes.length; index++) {
+      DexType holder = nodes[index].getProgramMethod().getHolderType();
+      if (holder.getFactoryIdentity() != factoryIdentity || holder.getFactoryId() < 0) {
+        Arrays.sort(nodes);
+        return;
+      }
+      maxFactoryId = Math.max(maxFactoryId, holder.getFactoryId());
+    }
+    if (maxFactoryId >= nodes.length) {
+      Arrays.sort(nodes);
+      return;
+    }
+
+    int[] counts = new int[maxFactoryId + 1];
+    int[] usedFactoryIds = new int[Math.min(nodes.length, counts.length)];
+    int holderCount = 0;
+    for (Node node : nodes) {
+      int factoryId = node.getProgramMethod().getHolderType().getFactoryId();
+      if (counts[factoryId]++ == 0) {
+        usedFactoryIds[holderCount++] = factoryId;
+      }
+    }
+    int[] nextOffsets = new int[counts.length];
+    int nextOffset = 0;
+    for (int index = 0; index < holderCount; index++) {
+      int factoryId = usedFactoryIds[index];
+      nextOffsets[factoryId] = nextOffset;
+      nextOffset += counts[factoryId];
+    }
+
+    Node[] groupedNodes = new Node[nodes.length];
+    for (Node node : nodes) {
+      int factoryId = node.getProgramMethod().getHolderType().getFactoryId();
+      groupedNodes[nextOffsets[factoryId]++] = node;
+    }
+    DexType[] holders = new DexType[holderCount];
+    for (int index = 0; index < holderCount; index++) {
+      int factoryId = usedFactoryIds[index];
+      int count = counts[factoryId];
+      holders[index] =
+          groupedNodes[nextOffsets[factoryId] - count].getProgramMethod().getHolderType();
+    }
+    Arrays.sort(holders);
+
+    nextOffset = 0;
+    for (DexType holder : holders) {
+      int factoryId = holder.getFactoryId();
+      int count = counts[factoryId];
+      int endOffset = nextOffsets[factoryId];
+      int startOffset = endOffset - count;
+      if (count > 1) {
+        Arrays.sort(groupedNodes, startOffset, endOffset, METHOD_SIGNATURE_COMPARATOR);
+      }
+      for (int index = startOffset; index < endOffset; index++) {
+        nodes[nextOffset++] = groupedNodes[index];
+      }
+    }
+    assert verifySorted(nodes);
+  }
+
+  private static boolean verifySorted(Node[] nodes) {
+    for (int index = 1; index < nodes.length; index++) {
+      assert nodes[index - 1].compareTo(nodes[index]) <= 0;
+    }
+    return true;
   }
 
   public int getNumberOfCallSites() {

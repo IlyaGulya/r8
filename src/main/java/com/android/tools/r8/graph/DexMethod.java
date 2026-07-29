@@ -204,6 +204,11 @@ public class DexMethod extends DexMember<DexEncodedMethod, DexMethod> {
     return proto.parameters.size();
   }
 
+  public int compareSignatureTo(DexMethod other) {
+    int order = name.compareTo(other.name);
+    return order != 0 ? order : proto.compareTo(other.proto);
+  }
+
   public DexMethodSignature getSignature() {
     return DexMethodSignature.create(this);
   }

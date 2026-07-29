@@ -4,7 +4,6 @@
 
 package com.android.tools.r8.utils;
 
-import com.google.common.collect.Sets;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.HashSet;
@@ -62,7 +61,7 @@ public class WorkList<T> {
   }
 
   private WorkList(EqualityTest equalityTest) {
-    this(equalityTest == EqualityTest.EQUALS ? new HashSet<>() : Sets.newIdentityHashSet());
+    this(equalityTest == EqualityTest.EQUALS ? new HashSet<>(3) : SetUtils.newIdentityHashSet(3));
   }
 
   private WorkList(Set<T> seen) {

@@ -53,7 +53,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Deque;
-import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
@@ -106,16 +105,6 @@ public class IRCode implements IRControlFlowGraph, ValueFactory {
 
     public boolean isEmpty() {
       return liveValues.isEmpty() && liveLocalValues.isEmpty();
-    }
-  }
-
-  // Stack marker to denote when all successors of a block have been processed when topologically
-  // sorting.
-  private static class BlockMarker {
-    final BasicBlock block;
-
-    BlockMarker(BasicBlock block) {
-      this.block = block;
     }
   }
 
@@ -556,9 +545,8 @@ public class IRCode implements IRControlFlowGraph, ValueFactory {
   /**
    * Compute quasi topologically sorted list of the basic blocks using depth first search.
    *
-   * TODO(ager): We probably want to compute strongly connected components and topologically
-   * sort strongly connected components instead. However, this is much better than having
-   * no sorting.
+   * <p>TODO(ager): We probably want to compute strongly connected components and topologically sort
+   * strongly connected components instead. However, this is much better than having no sorting.
    */
   public ImmutableList<BasicBlock> topologicallySortedBlocks() {
     ImmutableList<BasicBlock> ordered = depthFirstSorting();
@@ -568,28 +556,39 @@ public class IRCode implements IRControlFlowGraph, ValueFactory {
   }
 
   private ImmutableList<BasicBlock> depthFirstSorting() {
-    ArrayList<BasicBlock> reverseOrdered = new ArrayList<>(blocks.size());
-    Set<BasicBlock> visitedBlocks = new HashSet<>(blocks.size());
-    Deque<Object> worklist = new ArrayDeque<>(blocks.size());
-    worklist.addLast(entryBlock());
-    while (!worklist.isEmpty()) {
-      Object item = worklist.removeLast();
-      if (item instanceof BlockMarker) {
-        reverseOrdered.add(((BlockMarker) item).block);
-        continue;
-      }
-      BasicBlock block = (BasicBlock) item;
-      if (!visitedBlocks.contains(block)) {
-        visitedBlocks.add(block);
-        worklist.addLast(new BlockMarker(block));
-        for (int i = block.getSuccessors().size() - 1; i >= 0; i--) {
-          worklist.addLast(block.getSuccessors().get(i));
+    int blockCount = blocks.size();
+    BasicBlock[] blockStack = new BasicBlock[blockCount];
+    int[] successorIndexStack = new int[blockCount];
+    BasicBlock[] reverseOrdered = new BasicBlock[blockCount];
+    boolean[] visitedBlocks = new boolean[getCurrentBlockNumber()];
+    int stackSize = 1;
+    int orderedSize = 0;
+    BasicBlock entryBlock = entryBlock();
+    blockStack[0] = entryBlock;
+    visitedBlocks[entryBlock.getNumber()] = true;
+    while (stackSize > 0) {
+      int stackIndex = stackSize - 1;
+      BasicBlock block = blockStack[stackIndex];
+      int successorIndex = successorIndexStack[stackIndex];
+      if (successorIndex < block.getSuccessors().size()) {
+        BasicBlock successor = block.getSuccessors().get(successorIndex);
+        successorIndexStack[stackIndex] = successorIndex + 1;
+        int successorNumber = successor.getNumber();
+        if (!visitedBlocks[successorNumber]) {
+          visitedBlocks[successorNumber] = true;
+          blockStack[stackSize] = successor;
+          successorIndexStack[stackSize] = 0;
+          stackSize++;
         }
+      } else {
+        reverseOrdered[orderedSize++] = block;
+        blockStack[stackIndex] = null;
+        stackSize--;
       }
     }
     ImmutableList.Builder<BasicBlock> builder = ImmutableList.builder();
-    for (int i = reverseOrdered.size() - 1; i >= 0; i--) {
-      builder.add(reverseOrdered.get(i));
+    for (int i = orderedSize - 1; i >= 0; i--) {
+      builder.add(reverseOrdered[i]);
     }
     return builder.build();
   }

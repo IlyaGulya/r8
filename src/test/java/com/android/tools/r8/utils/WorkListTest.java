@@ -10,9 +10,12 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
+import java.util.ArrayDeque;
 import java.util.Arrays;
+import java.util.Deque;
 import java.util.HashSet;
 import java.util.NoSuchElementException;
+import java.util.Random;
 import java.util.Set;
 import org.junit.Test;
 
@@ -79,5 +82,56 @@ public class WorkListTest {
     assertSame(seen, workList.getMutableSeenSet());
     assertEquals(Integer.valueOf(2), workList.removeSeen());
     assertFalse(seen.contains(2));
+  }
+
+  @Test
+  public void testQueueOperationsAgainstArrayDeque() {
+    Random random = new Random(42);
+    WorkList<Integer> workList = WorkList.newEqualityWorkList();
+    Set<Integer> seen = new HashSet<>();
+    Deque<Integer> queue = new ArrayDeque<>();
+
+    for (int iteration = 0; iteration < 10_000; iteration++) {
+      int item = random.nextInt(64);
+      switch (random.nextInt(6)) {
+        case 0:
+          boolean expectedAddedLast = seen.add(item);
+          assertEquals(expectedAddedLast, workList.addIfNotSeen(item));
+          if (expectedAddedLast) {
+            queue.addLast(item);
+          }
+          break;
+        case 1:
+          boolean expectedAddedFirst = seen.add(item);
+          assertEquals(expectedAddedFirst, workList.addFirstIfNotSeen(item));
+          if (expectedAddedFirst) {
+            queue.addFirst(item);
+          }
+          break;
+        case 2:
+          workList.addIgnoringSeenSet(item);
+          queue.addLast(item);
+          break;
+        case 3:
+          workList.addFirstIgnoringSeenSet(item);
+          queue.addFirst(item);
+          break;
+        case 4:
+          if (queue.isEmpty()) {
+            assertThrows(NoSuchElementException.class, workList::next);
+          } else {
+            assertEquals(queue.removeFirst(), workList.next());
+          }
+          break;
+        default:
+          if (queue.isEmpty()) {
+            assertThrows(NoSuchElementException.class, workList::removeLast);
+          } else {
+            assertEquals(queue.removeLast(), workList.removeLast());
+          }
+      }
+      assertEquals(!queue.isEmpty(), workList.hasNext());
+      assertEquals(queue.isEmpty(), workList.isEmpty());
+    }
   }
 }

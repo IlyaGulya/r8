@@ -31,6 +31,8 @@ public abstract class DexApplication implements DexDefinitionSupplier {
   public final InternalOptions options;
   public final DexItemFactory dexItemFactory;
   private final DexApplicationReadFlags flags;
+  private volatile ImmutableList<DexProgramClass> programClassesWithDeterministicOrder;
+  private volatile ImmutableList<DexProgramClass> programClassesWithDeterministicReverseOrder;
 
   /** Constructor should only be invoked by the DexApplication.Builder. */
   DexApplication(
@@ -95,11 +97,36 @@ public abstract class DexApplication implements DexDefinitionSupplier {
   }
 
   public Collection<DexProgramClass> classesWithDeterministicOrder() {
+    boolean reverse = options.testing.reverseClassSortingForDeterminism;
+    ImmutableList<DexProgramClass> classes =
+        reverse
+            ? programClassesWithDeterministicReverseOrder
+            : programClassesWithDeterministicOrder;
+    return classes != null ? classes : computeClassesWithDeterministicOrder(reverse);
+  }
+
+  private synchronized ImmutableList<DexProgramClass> computeClassesWithDeterministicOrder(
+      boolean reverse) {
+    ImmutableList<DexProgramClass> cachedClasses =
+        reverse
+            ? programClassesWithDeterministicReverseOrder
+            : programClassesWithDeterministicOrder;
+    if (cachedClasses != null) {
+      return cachedClasses;
+    }
     Comparator<ClassDefinition> comparator = Comparator.comparing(ClassDefinition::getType);
-    if (options.testing.reverseClassSortingForDeterminism) {
+    if (reverse) {
       comparator = comparator.reversed();
     }
-    return classesWithDeterministicOrder(new ArrayList<>(programClasses()), comparator);
+    cachedClasses =
+        ImmutableList.copyOf(
+            classesWithDeterministicOrder(new ArrayList<>(programClasses()), comparator));
+    if (reverse) {
+      programClassesWithDeterministicReverseOrder = cachedClasses;
+    } else {
+      programClassesWithDeterministicOrder = cachedClasses;
+    }
+    return cachedClasses;
   }
 
   public static <T extends ClassDefinition> List<T> classesWithDeterministicOrder(

@@ -213,6 +213,32 @@ public class NodeExtractionTest extends CallGraphTestBase {
   }
 
   @Test
+  public void testSwitchExtractionDirection() {
+    Node root = createNode("root");
+    Node middle = createNode("middle");
+    Node leaf = createNode("leaf");
+    middle.addCallerConcurrently(root);
+    leaf.addCallerConcurrently(middle);
+
+    Set<Node> nodes = new TreeSet<>();
+    nodes.add(root);
+    nodes.add(middle);
+    nodes.add(leaf);
+
+    CallGraph callGraph = CallGraph.createForTesting(nodes);
+    Set<DexEncodedMethod> wave = callGraph.extractLeaves().toDefinitionSet();
+    assertEquals(1, wave.size());
+    assertThat(wave, hasItem(leaf.getMethod()));
+    wave = callGraph.extractRoots().toDefinitionSet();
+    assertEquals(1, wave.size());
+    assertThat(wave, hasItem(root.getMethod()));
+    wave = callGraph.extractLeaves().toDefinitionSet();
+    assertEquals(1, wave.size());
+    assertThat(wave, hasItem(middle.getMethod()));
+    assertTrue(callGraph.isEmpty());
+  }
+
+  @Test
   public void testExtractLeaves_largeCalleeSet() {
     Node caller = createNode("caller");
     Node middleCallee = null;

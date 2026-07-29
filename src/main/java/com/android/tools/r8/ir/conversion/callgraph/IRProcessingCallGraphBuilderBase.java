@@ -44,7 +44,7 @@ abstract class IRProcessingCallGraphBuilderBase extends CallGraphBuilderBase<Nod
 
     // The graph is populated concurrently, but consumed sequentially in processing waves. Avoid
     // retaining the concurrent iteration overhead in CallGraph.extractNodes().
-    return new CallGraph(new HashMap<>(nodes));
+    return new CallGraph(new HashMap<>(nodes), orderedNodes);
   }
 
   @Override

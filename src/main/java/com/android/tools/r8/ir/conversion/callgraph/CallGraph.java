@@ -12,14 +12,10 @@ import com.android.tools.r8.shaking.AppInfoWithLiveness;
 import com.android.tools.r8.utils.InternalOptions;
 import com.android.tools.r8.utils.collections.ProgramMethodSet;
 import com.android.tools.r8.utils.collections.SortedProgramMethodSet;
-import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Iterator;
-import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.Function;
-import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 /**
@@ -41,8 +37,20 @@ import java.util.stream.Collectors;
  */
 public class CallGraph extends CallGraphBase<Node> {
 
-  CallGraph(Map<DexMethod, Node> nodes) {
+  private final Node[] orderedNodes;
+
+  private boolean extractingLeaves;
+  private boolean extractionInitialized;
+  private boolean filterInactiveNodes;
+  private int[] remainingEdgeCounts;
+  private int[] readyNodes;
+  private int readyNodesTail;
+  private int waveStart;
+  private int waveEnd;
+
+  CallGraph(Map<DexMethod, Node> nodes, Node[] orderedNodes) {
     super(nodes);
+    this.orderedNodes = orderedNodes;
   }
 
   public static CallGraphBuilder builder(AppView<AppInfoWithLiveness> appView) {
@@ -50,12 +58,13 @@ public class CallGraph extends CallGraphBase<Node> {
   }
 
   public static CallGraph createForTesting(Collection<Node> nodes) {
-    Node.prepareForDeterministicTraversal(nodes);
+    Node[] orderedNodes = Node.prepareForDeterministicTraversal(nodes);
     return new CallGraph(
         nodes.stream()
             .collect(
                 Collectors.toMap(
-                    node -> node.getProgramMethod().getReference(), Function.identity())));
+                    node -> node.getProgramMethod().getReference(), Function.identity())),
+        orderedNodes);
   }
 
   public CallSiteInformation createCallSiteInformation(
@@ -79,39 +88,126 @@ public class CallGraph extends CallGraphBase<Node> {
   }
 
   public ProgramMethodSet extractLeaves() {
-    return extractNodes(Node::isLeaf, Node::cleanCallersAndReadersForRemoval);
+    return extractNodes(true, ignore -> {});
   }
 
   public ProgramMethodSet extractLeaves(Consumer<Node> nodeRemovalConsumer) {
-    return extractNodes(
-        Node::isLeaf,
-        node -> {
-          nodeRemovalConsumer.accept(node);
-          node.cleanCallersAndReadersForRemoval();
-        });
+    return extractNodes(true, nodeRemovalConsumer);
   }
 
   public ProgramMethodSet extractRoots() {
-    return extractNodes(Node::isRoot, Node::cleanCalleesAndWritersForRemoval);
+    return extractNodes(false, ignore -> {});
   }
 
-  private ProgramMethodSet extractNodes(Predicate<Node> predicate, Consumer<Node> clean) {
-    List<Node> removed = new ArrayList<>();
-    Iterator<Node> nodeIterator = nodes.values().iterator();
-    while (nodeIterator.hasNext()) {
-      Node node = nodeIterator.next();
-      if (predicate.test(node)) {
-        nodeIterator.remove();
-        removed.add(node);
-      }
+  private ProgramMethodSet extractNodes(boolean leaves, Consumer<Node> nodeRemovalConsumer) {
+    if (!extractionInitialized || extractingLeaves != leaves) {
+      initializeExtraction(leaves);
     }
+    int waveSize = waveEnd - waveStart;
+    assert waveSize > 0;
     ProgramMethodSet result =
         InternalOptions.DETERMINISTIC_DEBUGGING
             ? SortedProgramMethodSet.create()
-            : ProgramMethodSet.create(removed.size());
-    removed.forEach(node -> result.add(node.getProgramMethod()));
-    removed.forEach(clean);
+            : ProgramMethodSet.create(waveSize);
+    for (int index = waveStart; index < waveEnd; index++) {
+      Node node = orderedNodes[readyNodes[index]];
+      Node removed = nodes.remove(node.getProgramMethod().getReference());
+      assert removed == node;
+      result.add(node.getProgramMethod());
+      nodeRemovalConsumer.accept(node);
+    }
+    int nextWaveStart = waveEnd;
+    for (int index = waveStart; index < waveEnd; index++) {
+      Node node = orderedNodes[readyNodes[index]];
+      if (leaves) {
+        for (Node caller : node.getCallers()) {
+          decrementRemainingEdgeCount(caller);
+        }
+        for (Node reader : node.getReadersWithDeterministicOrder()) {
+          decrementRemainingEdgeCount(reader);
+        }
+      } else {
+        for (Node callee : node.getCalleesWithDeterministicOrder()) {
+          decrementRemainingEdgeCount(callee);
+        }
+        for (Node writer : node.getWritersWithDeterministicOrder()) {
+          decrementRemainingEdgeCount(writer);
+        }
+      }
+    }
+    waveStart = nextWaveStart;
+    waveEnd = readyNodesTail;
     assert !result.isEmpty();
     return result;
+  }
+
+  private void initializeExtraction(boolean leaves) {
+    extractingLeaves = leaves;
+    extractionInitialized = true;
+    filterInactiveNodes = nodes.size() != orderedNodes.length;
+    remainingEdgeCounts = new int[orderedNodes.length];
+    readyNodes = new int[nodes.size()];
+    readyNodesTail = 0;
+    waveStart = 0;
+    for (Node node : orderedNodes) {
+      if (filterInactiveNodes && !nodes.containsKey(node.getProgramMethod().getReference())) {
+        continue;
+      }
+      int remainingEdgeCount = countRemainingEdges(node, leaves);
+      int nodeIndex = node.getCallGraphOrder();
+      remainingEdgeCounts[nodeIndex] = remainingEdgeCount;
+      if (remainingEdgeCount == 0) {
+        readyNodes[readyNodesTail++] = nodeIndex;
+      }
+    }
+    waveEnd = readyNodesTail;
+    assert nodes.isEmpty() || waveEnd > 0;
+  }
+
+  private int countRemainingEdges(Node node, boolean leaves) {
+    if (!filterInactiveNodes) {
+      return leaves
+          ? node.getCalleesWithDeterministicOrder().size()
+              + node.getWritersWithDeterministicOrder().size()
+          : node.getCallers().size() + node.getReadersWithDeterministicOrder().size();
+    }
+    int count = 0;
+    if (leaves) {
+      for (Node callee : node.getCalleesWithDeterministicOrder()) {
+        if (nodes.containsKey(callee.getProgramMethod().getReference())) {
+          count++;
+        }
+      }
+      for (Node writer : node.getWritersWithDeterministicOrder()) {
+        if (nodes.containsKey(writer.getProgramMethod().getReference())) {
+          count++;
+        }
+      }
+    } else {
+      for (Node caller : node.getCallers()) {
+        if (nodes.containsKey(caller.getProgramMethod().getReference())) {
+          count++;
+        }
+      }
+      for (Node reader : node.getReadersWithDeterministicOrder()) {
+        if (nodes.containsKey(reader.getProgramMethod().getReference())) {
+          count++;
+        }
+      }
+    }
+    return count;
+  }
+
+  private void decrementRemainingEdgeCount(Node node) {
+    if (filterInactiveNodes && !nodes.containsKey(node.getProgramMethod().getReference())) {
+      return;
+    }
+    int nodeIndex = node.getCallGraphOrder();
+    int remainingEdgeCount = --remainingEdgeCounts[nodeIndex];
+    assert remainingEdgeCount >= 0;
+    if (remainingEdgeCount == 0) {
+      assert readyNodesTail < readyNodes.length;
+      readyNodes[readyNodesTail++] = nodeIndex;
+    }
   }
 }

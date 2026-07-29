@@ -5,8 +5,9 @@
 package com.android.tools.r8.utils;
 
 import java.util.ArrayDeque;
-import java.util.Deque;
 import java.util.HashSet;
+import java.util.NoSuchElementException;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
@@ -15,8 +16,9 @@ import java.util.function.Function;
 
 public class WorkList<T> {
 
-  private final Deque<T> workingList = new ArrayDeque<>();
   private final Set<T> seen;
+  private T firstItem;
+  private ArrayDeque<T> additionalItems;
 
   public static <T> WorkList<T> newEqualityWorkList() {
     return new WorkList<T>(EqualityTest.EQUALS);
@@ -68,12 +70,28 @@ public class WorkList<T> {
     this.seen = seen;
   }
 
+  private ArrayDeque<T> getOrCreateAdditionalItems() {
+    if (additionalItems == null) {
+      additionalItems = new ArrayDeque<>();
+    }
+    return additionalItems;
+  }
+
+  private void addLast(T item) {
+    Objects.requireNonNull(item);
+    if (firstItem == null) {
+      firstItem = item;
+    } else {
+      getOrCreateAdditionalItems().addLast(item);
+    }
+  }
+
   public void addIgnoringSeenSet(T item) {
-    workingList.addLast(item);
+    addLast(item);
   }
 
   public void addAllIgnoringSeenSet(Iterable<T> items) {
-    items.forEach(workingList::addLast);
+    items.forEach(this::addLast);
   }
 
   public void addIfNotSeen(Iterable<? extends T> items) {
@@ -88,7 +106,7 @@ public class WorkList<T> {
 
   public boolean addIfNotSeen(T item) {
     if (seen.add(item)) {
-      workingList.addLast(item);
+      addLast(item);
       return true;
     }
     return false;
@@ -96,7 +114,7 @@ public class WorkList<T> {
 
   public boolean addFirstIfNotSeen(T item) {
     if (seen.add(item)) {
-      workingList.addFirst(item);
+      addFirstIgnoringSeenSet(item);
       return true;
     }
     return false;
@@ -129,11 +147,15 @@ public class WorkList<T> {
   }
 
   public void addFirstIgnoringSeenSet(T item) {
-    workingList.addFirst(item);
+    Objects.requireNonNull(item);
+    if (firstItem != null) {
+      getOrCreateAdditionalItems().addFirst(firstItem);
+    }
+    firstItem = item;
   }
 
   public boolean hasNext() {
-    return !workingList.isEmpty();
+    return firstItem != null;
   }
 
   public boolean isEmpty() {
@@ -153,11 +175,25 @@ public class WorkList<T> {
   }
 
   public T next() {
-    return workingList.removeFirst();
+    T result = firstItem;
+    if (result == null) {
+      throw new NoSuchElementException();
+    }
+    firstItem = additionalItems == null ? null : additionalItems.pollFirst();
+    return result;
   }
 
   public T removeLast() {
-    return workingList.removeLast();
+    T result = additionalItems == null ? null : additionalItems.pollLast();
+    if (result != null) {
+      return result;
+    }
+    result = firstItem;
+    if (result == null) {
+      throw new NoSuchElementException();
+    }
+    firstItem = null;
+    return result;
   }
 
   public T removeSeen() {

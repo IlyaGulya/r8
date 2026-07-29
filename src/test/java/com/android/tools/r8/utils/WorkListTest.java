@@ -134,4 +134,17 @@ public class WorkListTest {
       assertEquals(queue.isEmpty(), workList.isEmpty());
     }
   }
+
+  @Test
+  public void testNullIsRejectedLikeArrayDeque() {
+    WorkList<Object> workList = WorkList.newEqualityWorkList();
+
+    assertThrows(NullPointerException.class, () -> workList.addIgnoringSeenSet(null));
+    assertThrows(NullPointerException.class, () -> workList.addFirstIgnoringSeenSet(null));
+    assertFalse(workList.hasNext());
+
+    assertThrows(NullPointerException.class, () -> workList.addIfNotSeen((Object) null));
+    assertTrue(workList.isSeen(null));
+    assertFalse(workList.hasNext());
+  }
 }

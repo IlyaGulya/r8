@@ -1408,7 +1408,9 @@ public class ComposingBuilder {
     private void writeMethods(ChainableStringConsumer consumer) {
       methodsWithoutPosition.forEach(
           (ignored, mapped) -> {
-            consumer.accept(INDENTATION).accept(mapped.toString()).accept("\n");
+            consumer.accept(INDENTATION);
+            mapped.write(consumer);
+            consumer.accept("\n");
             for (MappingInformation info : mapped.getAdditionalMappingInformation()) {
               consumer.accept(INDENTATION).accept("# ").accept(info.serialize()).accept("\n");
             }
@@ -1422,7 +1424,9 @@ public class ComposingBuilder {
                 mappedRanges ->
                     mappedRanges.forEach(
                         mappedRange -> {
-                          consumer.accept(INDENTATION).accept(mappedRange.toString()).accept("\n");
+                          consumer.accept(INDENTATION);
+                          mappedRange.write(consumer);
+                          consumer.accept("\n");
                           for (MappingInformation info :
                               mappedRange.getAdditionalMappingInformation()) {
                             consumer

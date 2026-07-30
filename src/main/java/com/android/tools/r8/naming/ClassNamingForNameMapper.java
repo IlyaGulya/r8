@@ -539,7 +539,9 @@ public class ClassNamingForNameMapper implements ClassNaming {
     }
 
     for (MappedRange range : mappedRangesSorted) {
-      consumer.accept(spacing).accept(range.toString()).accept("\n");
+      consumer.accept(spacing);
+      range.write(consumer);
+      consumer.accept("\n");
       for (MappingInformation info : range.getAdditionalMappingInformation()) {
         consumer.accept(spacing + "  # ").accept(info.serialize()).accept("\n");
       }
@@ -770,15 +772,35 @@ public class ClassNamingForNameMapper implements ClassNaming {
     @Override
     public String toString() {
       StringBuilder builder = new StringBuilder();
-      if (minifiedRange != null) {
-        builder.append(minifiedRange).append(':');
-      }
-      builder.append(signature);
-      if (originalRange != null && !originalRange.equals(minifiedRange)) {
-        builder.append(":").append(originalRange);
-      }
-      builder.append(" -> ").append(renamedName);
+      write(ChainableStringConsumer.wrap(builder::append));
       return builder.toString();
+    }
+
+    public void write(ChainableStringConsumer consumer) {
+      if (minifiedRange != null) {
+        writeRange(consumer, minifiedRange);
+        consumer.accept(":");
+      }
+      consumer.accept(signature.type).accept(" ").accept(signature.name).accept("(");
+      for (int i = 0; i < signature.parameters.length; i++) {
+        if (i > 0) {
+          consumer.accept(",");
+        }
+        consumer.accept(signature.parameters[i]);
+      }
+      consumer.accept(")");
+      if (originalRange != null && !originalRange.equals(minifiedRange)) {
+        consumer.accept(":");
+        writeRange(consumer, originalRange);
+      }
+      consumer.accept(" -> ").accept(renamedName);
+    }
+
+    private static void writeRange(ChainableStringConsumer consumer, Range range) {
+      consumer.accept(Integer.toString(range.from));
+      if (!range.isCardinal) {
+        consumer.accept(":").accept(Integer.toString(range.to));
+      }
     }
 
     @Override

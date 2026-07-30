@@ -6,17 +6,19 @@ package com.android.tools.r8.ir.regalloc;
 
 import com.android.tools.r8.errors.Unreachable;
 import java.util.Arrays;
-import java.util.BitSet;
 
 public class RegisterPositionsImpl extends RegisterPositions {
 
   private static final int INITIAL_SIZE = 16;
+  private static final int HOLDS_CONSTANT = 1;
+  private static final int HOLDS_MONITOR = 1 << 1;
+  private static final int HOLDS_NEW_STRING_INSTANCE_DISALLOWING_SPILLING = 1 << 2;
+  private static final int REGISTER_TYPE_MASK =
+      HOLDS_CONSTANT | HOLDS_MONITOR | HOLDS_NEW_STRING_INSTANCE_DISALLOWING_SPILLING;
+  private static final int BLOCKED = 1 << 3;
   private final int limit;
   private int[] backing;
-  private final BitSet registerHoldsConstant;
-  private final BitSet registerHoldsMonitor;
-  private final BitSet registerHoldsNewStringInstanceDisallowingSpilling;
-  private final BitSet blockedRegisters;
+  private final byte[] registerFlags;
 
   public RegisterPositionsImpl(int limit) {
     this.limit = limit;
@@ -24,10 +26,8 @@ public class RegisterPositionsImpl extends RegisterPositions {
     for (int i = 0; i < INITIAL_SIZE; i++) {
       backing[i] = Integer.MAX_VALUE;
     }
-    registerHoldsConstant = new BitSet(limit);
-    registerHoldsMonitor = new BitSet(limit);
-    registerHoldsNewStringInstanceDisallowingSpilling = new BitSet(limit);
-    blockedRegisters = new BitSet(limit);
+    // Wide register queries may inspect the register immediately after the limit.
+    registerFlags = new byte[limit + 1];
   }
 
   @Override
@@ -35,30 +35,16 @@ public class RegisterPositionsImpl extends RegisterPositions {
     assert !isBlocked(index);
     switch (type) {
       case MONITOR:
-        return holdsMonitor(index);
+        return (registerFlags[index] & HOLDS_MONITOR) != 0;
       case CONST_NUMBER:
-        return holdsConstant(index);
+        return (registerFlags[index] & HOLDS_CONSTANT) != 0;
       case OTHER:
-        return !holdsMonitor(index)
-            && !holdsConstant(index)
-            && !holdsNewStringInstanceDisallowingSpilling(index);
+        return (registerFlags[index] & REGISTER_TYPE_MASK) == 0;
       case ANY:
         return true;
       default:
         throw new Unreachable("Unexpected register position type: " + type);
     }
-  }
-
-  private boolean holdsConstant(int index) {
-    return registerHoldsConstant.get(index);
-  }
-
-  private boolean holdsMonitor(int index) {
-    return registerHoldsMonitor.get(index);
-  }
-
-  private boolean holdsNewStringInstanceDisallowingSpilling(int index) {
-    return registerHoldsNewStringInstanceDisallowingSpilling.get(index);
   }
 
   private void set(int index, int value) {
@@ -71,10 +57,17 @@ public class RegisterPositionsImpl extends RegisterPositions {
   @Override
   public void set(int index, int value, LiveIntervals intervals) {
     set(index, value);
-    registerHoldsConstant.set(index, intervals.isConstantNumberInterval());
-    registerHoldsMonitor.set(index, intervals.usedInMonitorOperation());
-    registerHoldsNewStringInstanceDisallowingSpilling.set(
-        index, intervals.isNewStringInstanceDisallowingSpilling());
+    int flags = registerFlags[index] & BLOCKED;
+    if (intervals.isConstantNumberInterval()) {
+      flags |= HOLDS_CONSTANT;
+    }
+    if (intervals.usedInMonitorOperation()) {
+      flags |= HOLDS_MONITOR;
+    }
+    if (intervals.isNewStringInstanceDisallowingSpilling()) {
+      flags |= HOLDS_NEW_STRING_INSTANCE_DISALLOWING_SPILLING;
+    }
+    registerFlags[index] = (byte) flags;
   }
 
   @Override
@@ -94,12 +87,12 @@ public class RegisterPositionsImpl extends RegisterPositions {
 
   @Override
   public void setBlocked(int index) {
-    blockedRegisters.set(index);
+    registerFlags[index] |= BLOCKED;
   }
 
   @Override
   public boolean isBlocked(int index) {
-    return blockedRegisters.get(index);
+    return (registerFlags[index] & BLOCKED) != 0;
   }
 
   private void grow(int minSize) {

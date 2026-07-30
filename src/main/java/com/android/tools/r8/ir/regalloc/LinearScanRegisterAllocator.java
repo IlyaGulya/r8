@@ -2634,7 +2634,7 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
   }
 
   private int handleWorkaround(
-      Predicate<LiveIntervals> workaroundNeeded,
+      boolean workaroundNeeded,
       IntObjPredicate<LiveIntervals> workaroundNeededForCandidate,
       int candidate,
       LiveIntervals unhandledInterval,
@@ -2642,7 +2642,7 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
       boolean needsRegisterPair,
       RegisterPositionsWithExtraBlockedRegisters freePositions,
       RegisterType type) {
-    if (workaroundNeeded.test(unhandledInterval)) {
+    if (workaroundNeeded) {
       int lastCandidate = candidate;
       while (workaroundNeededForCandidate.test(candidate, unhandledInterval)) {
         // Make the unusable register unavailable for allocation and try again.
@@ -2683,13 +2683,23 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
     if (candidate == REGISTER_CANDIDATE_NOT_FOUND) {
       return candidate;
     }
+    boolean needsLongResultOverlappingLongOperandsWorkaround =
+        needsLongResultOverlappingLongOperandsWorkaround(unhandledInterval);
+    boolean needsSingleResultOverlappingLongOperandsWorkaround =
+        needsSingleResultOverlappingLongOperandsWorkaround(unhandledInterval);
+    boolean needsArrayGetWideWorkaround = needsArrayGetWideWorkaround(unhandledInterval);
+    if (!needsLongResultOverlappingLongOperandsWorkaround
+        && !needsSingleResultOverlappingLongOperandsWorkaround
+        && !needsArrayGetWideWorkaround) {
+      return candidate;
+    }
     // Wrap the use positions such that registers blocked by the workarounds are only blocked until
     // the end of this method.
     RegisterPositionsWithExtraBlockedRegisters usePositionsWrapper =
         new RegisterPositionsWithExtraBlockedRegisters(usePositions);
     candidate =
         handleWorkaround(
-            this::needsLongResultOverlappingLongOperandsWorkaround,
+            needsLongResultOverlappingLongOperandsWorkaround,
             this::isLongResultOverlappingLongOperands,
             candidate,
             unhandledInterval,
@@ -2699,7 +2709,7 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
             type);
     candidate =
         handleWorkaround(
-            this::needsSingleResultOverlappingLongOperandsWorkaround,
+            needsSingleResultOverlappingLongOperandsWorkaround,
             this::isSingleResultOverlappingLongOperands,
             candidate,
             unhandledInterval,
@@ -2709,7 +2719,7 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
             type);
     candidate =
         handleWorkaround(
-            this::needsArrayGetWideWorkaround,
+            needsArrayGetWideWorkaround,
             this::isArrayGetArrayRegister,
             candidate,
             unhandledInterval,

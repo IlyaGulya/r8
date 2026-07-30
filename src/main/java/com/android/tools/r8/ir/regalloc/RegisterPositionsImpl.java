@@ -13,10 +13,10 @@ public class RegisterPositionsImpl extends RegisterPositions {
   private static final int INITIAL_SIZE = 16;
   private final int limit;
   private int[] backing;
-  private final BitSet registerHoldsConstant;
-  private final BitSet registerHoldsMonitor;
-  private final BitSet registerHoldsNewStringInstanceDisallowingSpilling;
-  private final BitSet blockedRegisters;
+  private BitSet registerHoldsConstant;
+  private BitSet registerHoldsMonitor;
+  private BitSet registerHoldsNewStringInstanceDisallowingSpilling;
+  private BitSet blockedRegisters;
 
   public RegisterPositionsImpl(int limit) {
     this.limit = limit;
@@ -24,10 +24,6 @@ public class RegisterPositionsImpl extends RegisterPositions {
     for (int i = 0; i < INITIAL_SIZE; i++) {
       backing[i] = Integer.MAX_VALUE;
     }
-    registerHoldsConstant = new BitSet(limit);
-    registerHoldsMonitor = new BitSet(limit);
-    registerHoldsNewStringInstanceDisallowingSpilling = new BitSet(limit);
-    blockedRegisters = new BitSet(limit);
   }
 
   @Override
@@ -50,15 +46,27 @@ public class RegisterPositionsImpl extends RegisterPositions {
   }
 
   private boolean holdsConstant(int index) {
-    return registerHoldsConstant.get(index);
+    return registerHoldsConstant != null && registerHoldsConstant.get(index);
   }
 
   private boolean holdsMonitor(int index) {
-    return registerHoldsMonitor.get(index);
+    return registerHoldsMonitor != null && registerHoldsMonitor.get(index);
   }
 
   private boolean holdsNewStringInstanceDisallowingSpilling(int index) {
-    return registerHoldsNewStringInstanceDisallowingSpilling.get(index);
+    return registerHoldsNewStringInstanceDisallowingSpilling != null
+        && registerHoldsNewStringInstanceDisallowingSpilling.get(index);
+  }
+
+  private BitSet setBit(BitSet bits, int index, boolean value) {
+    if (bits == null) {
+      if (!value) {
+        return null;
+      }
+      bits = new BitSet(limit);
+    }
+    bits.set(index, value);
+    return bits;
   }
 
   private void set(int index, int value) {
@@ -71,10 +79,14 @@ public class RegisterPositionsImpl extends RegisterPositions {
   @Override
   public void set(int index, int value, LiveIntervals intervals) {
     set(index, value);
-    registerHoldsConstant.set(index, intervals.isConstantNumberInterval());
-    registerHoldsMonitor.set(index, intervals.usedInMonitorOperation());
-    registerHoldsNewStringInstanceDisallowingSpilling.set(
-        index, intervals.isNewStringInstanceDisallowingSpilling());
+    registerHoldsConstant =
+        setBit(registerHoldsConstant, index, intervals.isConstantNumberInterval());
+    registerHoldsMonitor = setBit(registerHoldsMonitor, index, intervals.usedInMonitorOperation());
+    registerHoldsNewStringInstanceDisallowingSpilling =
+        setBit(
+            registerHoldsNewStringInstanceDisallowingSpilling,
+            index,
+            intervals.isNewStringInstanceDisallowingSpilling());
   }
 
   @Override
@@ -94,12 +106,15 @@ public class RegisterPositionsImpl extends RegisterPositions {
 
   @Override
   public void setBlocked(int index) {
+    if (blockedRegisters == null) {
+      blockedRegisters = new BitSet(limit);
+    }
     blockedRegisters.set(index);
   }
 
   @Override
   public boolean isBlocked(int index) {
-    return blockedRegisters.get(index);
+    return blockedRegisters != null && blockedRegisters.get(index);
   }
 
   private void grow(int minSize) {

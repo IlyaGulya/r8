@@ -10,7 +10,7 @@ import java.util.BitSet;
 
 public class RegisterPositionsImpl extends RegisterPositions {
 
-  private static final int INITIAL_SIZE = 16;
+  private static final int HOT_TIER_SIZE = 257;
   private final int limit;
   private int[] backing;
   private final BitSet registerHoldsConstant;
@@ -20,10 +20,8 @@ public class RegisterPositionsImpl extends RegisterPositions {
 
   public RegisterPositionsImpl(int limit) {
     this.limit = limit;
-    backing = new int[INITIAL_SIZE];
-    for (int i = 0; i < INITIAL_SIZE; i++) {
-      backing[i] = Integer.MAX_VALUE;
-    }
+    backing = new int[Math.min(HOT_TIER_SIZE, limit)];
+    Arrays.fill(backing, Integer.MAX_VALUE);
     registerHoldsConstant = new BitSet(limit);
     registerHoldsMonitor = new BitSet(limit);
     registerHoldsNewStringInstanceDisallowingSpilling = new BitSet(limit);

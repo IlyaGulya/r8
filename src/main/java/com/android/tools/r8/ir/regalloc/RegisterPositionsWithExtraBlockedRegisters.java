@@ -9,11 +9,10 @@ import java.util.BitSet;
 public class RegisterPositionsWithExtraBlockedRegisters extends RegisterPositions {
 
   private final RegisterPositions positions;
-  private final BitSet extraBlockedRegisters;
+  private BitSet extraBlockedRegisters;
 
   public RegisterPositionsWithExtraBlockedRegisters(RegisterPositions positions) {
     this.positions = positions;
-    this.extraBlockedRegisters = new BitSet(positions.getLimit());
   }
 
   @Override
@@ -44,6 +43,9 @@ public class RegisterPositionsWithExtraBlockedRegisters extends RegisterPosition
   }
 
   public void setBlockedTemporarily(int index) {
+    if (extraBlockedRegisters == null) {
+      extraBlockedRegisters = new BitSet(positions.getLimit());
+    }
     extraBlockedRegisters.set(index);
   }
 
@@ -53,6 +55,6 @@ public class RegisterPositionsWithExtraBlockedRegisters extends RegisterPosition
   }
 
   public boolean isBlockedTemporarily(int index) {
-    return extraBlockedRegisters.get(index);
+    return extraBlockedRegisters != null && extraBlockedRegisters.get(index);
   }
 }

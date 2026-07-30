@@ -10,9 +10,8 @@ import java.util.BitSet;
 
 public class RegisterPositionsImpl extends RegisterPositions {
 
-  private static final int INITIAL_SIZE = 16;
   private final int limit;
-  private int[] backing;
+  private final int[] backing;
   private final BitSet registerHoldsConstant;
   private final BitSet registerHoldsMonitor;
   private final BitSet registerHoldsNewStringInstanceDisallowingSpilling;
@@ -20,10 +19,8 @@ public class RegisterPositionsImpl extends RegisterPositions {
 
   public RegisterPositionsImpl(int limit) {
     this.limit = limit;
-    backing = new int[INITIAL_SIZE];
-    for (int i = 0; i < INITIAL_SIZE; i++) {
-      backing[i] = Integer.MAX_VALUE;
-    }
+    backing = new int[limit];
+    Arrays.fill(backing, Integer.MAX_VALUE);
     registerHoldsConstant = new BitSet(limit);
     registerHoldsMonitor = new BitSet(limit);
     registerHoldsNewStringInstanceDisallowingSpilling = new BitSet(limit);
@@ -62,9 +59,6 @@ public class RegisterPositionsImpl extends RegisterPositions {
   }
 
   private void set(int index, int value) {
-    if (index >= backing.length) {
-      grow(index + 1);
-    }
     backing[index] = value;
   }
 
@@ -80,7 +74,7 @@ public class RegisterPositionsImpl extends RegisterPositions {
   @Override
   public int get(int index) {
     assert !isBlocked(index);
-    if (index < backing.length) {
+    if (index < limit) {
       return backing[index];
     }
     assert index < limit;
@@ -100,18 +94,5 @@ public class RegisterPositionsImpl extends RegisterPositions {
   @Override
   public boolean isBlocked(int index) {
     return blockedRegisters.get(index);
-  }
-
-  private void grow(int minSize) {
-    int size = backing.length;
-    while (size < minSize) {
-      size *= 2;
-    }
-    size = Math.min(size, limit);
-    int oldSize = backing.length;
-    backing = Arrays.copyOf(backing, size);
-    for (int i = oldSize; i < size; i++) {
-      backing[i] = Integer.MAX_VALUE;
-    }
   }
 }

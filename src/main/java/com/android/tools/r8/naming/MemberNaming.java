@@ -178,7 +178,6 @@ public class MemberNaming implements MappingWithResidualInfo, Comparable<MemberN
     return Comparator.comparing(MemberNaming::isFieldNaming)
         .thenComparing(MemberNaming::getRenamedName)
         .thenComparing(MemberNaming::getOriginalName)
-        .thenComparing(memberNaming -> getOriginalSignature().toString())
         .compare(this, other);
   }
 

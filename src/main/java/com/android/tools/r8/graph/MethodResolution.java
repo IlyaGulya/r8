@@ -19,6 +19,7 @@ import com.android.tools.r8.utils.SetUtils;
 import com.google.common.collect.Sets;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
@@ -80,6 +81,23 @@ public class MethodResolution {
     return definitionFor.apply(type);
   }
 
+  private MethodResolutionResult resolveMethodsOnMultipleClassDefinitions(
+      ClassResolutionResult classResolutionResult,
+      Function<DexClass, MethodResolutionResult> resolver,
+      MethodResolutionResult emptyResult,
+      Collection<DexType> responsibleTypesForNoSuchMethodResult) {
+    assert classResolutionResult.isMultipleClassResolutionResult();
+    MethodResolutionResult.Builder builder = MethodResolutionResult.builder();
+    classResolutionResult.forEachClassResolutionResult(
+        clazz -> {
+          MethodResolutionResult result = resolver.apply(clazz);
+          if (result != null) {
+            builder.addResolutionResult(result);
+          }
+        });
+    return builder.buildOrIfEmpty(emptyResult, responsibleTypesForNoSuchMethodResult);
+  }
+
   /**
    * This method will query the definition of the holder to decide on which resolution to use. If
    * the holder is an interface, it delegates to {@link #resolveMethodOnInterface(DexClass,
@@ -94,15 +112,24 @@ public class MethodResolution {
     if (holder.isArrayType()) {
       return resolveMethodOnArray(holder, method.getProto(), method.getName());
     }
-    MethodResolutionResult.Builder builder = MethodResolutionResult.builder();
-    definitionFor(holder)
-        .forEachClassResolutionResult(
-            clazz ->
-                builder.addResolutionResult(
-                    clazz.isInterface()
-                        ? resolveMethodOnInterface(clazz, method.getProto(), method.getName())
-                        : resolveMethodOnClass(clazz, method.getProto(), method.getName())));
-    return builder.buildOrIfEmpty(ClassNotFoundResult.INSTANCE, holder);
+    ClassResolutionResult classResolutionResult = definitionFor(holder);
+    if (!classResolutionResult.isMultipleClassResolutionResult()) {
+      DexClass clazz = classResolutionResult.toSingleClassWithProgramOverLibrary();
+      if (clazz == null) {
+        return ClassNotFoundResult.INSTANCE;
+      }
+      return clazz.isInterface()
+          ? resolveMethodOnInterface(clazz, method.getProto(), method.getName())
+          : resolveMethodOnClass(clazz, method.getProto(), method.getName());
+    }
+    return resolveMethodsOnMultipleClassDefinitions(
+        classResolutionResult,
+        clazz ->
+            clazz.isInterface()
+                ? resolveMethodOnInterface(clazz, method.getProto(), method.getName())
+                : resolveMethodOnClass(clazz, method.getProto(), method.getName()),
+        ClassNotFoundResult.INSTANCE,
+        Collections.singleton(holder));
   }
 
   /**
@@ -138,18 +165,27 @@ public class MethodResolution {
     if (holder.isArrayType()) {
       return resolveMethodOnArray(holder, methodProto, methodName);
     }
-    MethodResolutionResult.Builder builder = MethodResolutionResult.builder();
-    definitionFor(holder)
-        .forEachClassResolutionResult(
-            clazz -> {
-              // Step 1: If holder is an interface, resolution fails with an ICCE.
-              if (clazz.isInterface()) {
-                builder.addResolutionResult(IncompatibleClassResult.INSTANCE);
-              } else {
-                builder.addResolutionResult(resolveMethodOnClass(clazz, methodProto, methodName));
-              }
-            });
-    return builder.buildOrIfEmpty(ClassNotFoundResult.INSTANCE, holder);
+    ClassResolutionResult classResolutionResult = definitionFor(holder);
+    if (!classResolutionResult.isMultipleClassResolutionResult()) {
+      DexClass clazz = classResolutionResult.toSingleClassWithProgramOverLibrary();
+      if (clazz == null) {
+        return ClassNotFoundResult.INSTANCE;
+      }
+      // Step 1: If holder is an interface, resolution fails with an ICCE.
+      return clazz.isInterface()
+          ? IncompatibleClassResult.INSTANCE
+          : resolveMethodOnClass(clazz, methodProto, methodName);
+    }
+    return resolveMethodsOnMultipleClassDefinitions(
+        classResolutionResult,
+        clazz -> {
+          // Step 1: If holder is an interface, resolution fails with an ICCE.
+          return clazz.isInterface()
+              ? IncompatibleClassResult.INSTANCE
+              : resolveMethodOnClass(clazz, methodProto, methodName);
+        },
+        ClassNotFoundResult.INSTANCE,
+        Collections.singleton(holder));
   }
 
   public MethodResolutionResult resolveMethodOnClass(
@@ -199,24 +235,32 @@ public class MethodResolution {
     }
     // Pt 3: Apply step two to direct superclass of holder.
     if (clazz.superType != null) {
-      MethodResolutionResult.Builder builder = MethodResolutionResult.builder();
-      definitionFor(clazz.superType)
-          .forEachClassResolutionResult(
-              superClass -> {
-                // Guard against going back into the program for resolution.
-                if (escapeIfLibraryHasProgramSuperType
-                    && clazz.isLibraryClass()
-                    && !superClass.isLibraryClass()) {
-                  return;
-                }
-                MethodResolutionResult superTypeResult =
-                    resolveMethodOnClassStep2(
-                        superClass, methodProto, methodName, initialResolutionHolder);
-                if (superTypeResult != null) {
-                  builder.addResolutionResult(superTypeResult);
-                }
-              });
-      return builder.buildOrIfEmpty(null, clazz.superType);
+      ClassResolutionResult classResolutionResult = definitionFor(clazz.superType);
+      if (!classResolutionResult.isMultipleClassResolutionResult()) {
+        DexClass superClass = classResolutionResult.toSingleClassWithProgramOverLibrary();
+        if (superClass == null
+            || (escapeIfLibraryHasProgramSuperType
+                && clazz.isLibraryClass()
+                && !superClass.isLibraryClass())) {
+          return null;
+        }
+        return resolveMethodOnClassStep2(
+            superClass, methodProto, methodName, initialResolutionHolder);
+      }
+      return resolveMethodsOnMultipleClassDefinitions(
+          classResolutionResult,
+          superClass -> {
+            // Guard against going back into the program for resolution.
+            if (escapeIfLibraryHasProgramSuperType
+                && clazz.isLibraryClass()
+                && !superClass.isLibraryClass()) {
+              return null;
+            }
+            return resolveMethodOnClassStep2(
+                superClass, methodProto, methodName, initialResolutionHolder);
+          },
+          null,
+          Collections.singleton(clazz.superType));
     }
     return null;
   }
@@ -518,20 +562,28 @@ public class MethodResolution {
     if (holder.isArrayType()) {
       return IncompatibleClassResult.INSTANCE;
     }
-    MethodResolutionResult.Builder builder = MethodResolutionResult.builder();
     // Step 1: Lookup interface.
-    definitionFor(holder)
-        .forEachClassResolutionResult(
-            definition -> {
-              // If the definition is not an interface, resolution fails with an ICCE.
-              if (!definition.isInterface()) {
-                builder.addResolutionResult(IncompatibleClassResult.INSTANCE);
-              } else {
-                builder.addResolutionResult(
-                    resolveMethodOnInterface(definition, proto, methodName));
-              }
-            });
-    return builder.buildOrIfEmpty(ClassNotFoundResult.INSTANCE, holder);
+    ClassResolutionResult classResolutionResult = definitionFor(holder);
+    if (!classResolutionResult.isMultipleClassResolutionResult()) {
+      DexClass definition = classResolutionResult.toSingleClassWithProgramOverLibrary();
+      if (definition == null) {
+        return ClassNotFoundResult.INSTANCE;
+      }
+      // If the definition is not an interface, resolution fails with an ICCE.
+      return definition.isInterface()
+          ? resolveMethodOnInterface(definition, proto, methodName)
+          : IncompatibleClassResult.INSTANCE;
+    }
+    return resolveMethodsOnMultipleClassDefinitions(
+        classResolutionResult,
+        definition -> {
+          // If the definition is not an interface, resolution fails with an ICCE.
+          return definition.isInterface()
+              ? resolveMethodOnInterface(definition, proto, methodName)
+              : IncompatibleClassResult.INSTANCE;
+        },
+        ClassNotFoundResult.INSTANCE,
+        Collections.singleton(holder));
   }
 
   public MethodResolutionResult resolveMethodOnInterface(
@@ -543,23 +595,35 @@ public class MethodResolution {
       return MethodResolutionResult.createSingleResolutionResult(definition, definition, result);
     }
     // Step 3: Look for matching method on object class.
-    MethodResolutionResult.Builder builder = MethodResolutionResult.builder();
-    definitionFor(factory.objectType)
-        .forEachClassResolutionResult(
-            objectClass -> {
-              DexEncodedMethod objectResult = lookupMethod(objectClass, methodProto, methodName);
-              if (objectResult != null && objectResult.isPublic() && !objectResult.isAbstract()) {
-                builder.addResolutionResult(
-                    MethodResolutionResult.createSingleResolutionResult(
-                        definition, objectClass, objectResult));
-              } else {
-                // Step 3: Look for maximally-specific superinterface methods or any interface
-                // definition. This is the same for classes and interfaces.
-                builder.addResolutionResult(
-                    resolveMethodStep3(definition, methodProto, methodName));
-              }
-            });
-    return builder.buildOrIfEmpty(ClassNotFoundResult.INSTANCE, Collections.emptySet());
+    ClassResolutionResult classResolutionResult = definitionFor(factory.objectType);
+    if (!classResolutionResult.isMultipleClassResolutionResult()) {
+      DexClass objectClass = classResolutionResult.toSingleClassWithProgramOverLibrary();
+      if (objectClass == null) {
+        return ClassNotFoundResult.INSTANCE;
+      }
+      DexEncodedMethod objectResult = lookupMethod(objectClass, methodProto, methodName);
+      if (objectResult != null && objectResult.isPublic() && !objectResult.isAbstract()) {
+        return MethodResolutionResult.createSingleResolutionResult(
+            definition, objectClass, objectResult);
+      }
+      // Step 3: Look for maximally-specific superinterface methods or any interface definition.
+      // This is the same for classes and interfaces.
+      return resolveMethodStep3(definition, methodProto, methodName);
+    }
+    return resolveMethodsOnMultipleClassDefinitions(
+        classResolutionResult,
+        objectClass -> {
+          DexEncodedMethod objectResult = lookupMethod(objectClass, methodProto, methodName);
+          if (objectResult != null && objectResult.isPublic() && !objectResult.isAbstract()) {
+            return MethodResolutionResult.createSingleResolutionResult(
+                definition, objectClass, objectResult);
+          }
+          // Step 3: Look for maximally-specific superinterface methods or any interface
+          // definition. This is the same for classes and interfaces.
+          return resolveMethodStep3(definition, methodProto, methodName);
+        },
+        ClassNotFoundResult.INSTANCE,
+        Collections.emptySet());
   }
 
   class MaximallySpecificMethodsBuilder {

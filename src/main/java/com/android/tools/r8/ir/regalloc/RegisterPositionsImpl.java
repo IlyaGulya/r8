@@ -20,10 +20,6 @@ public class RegisterPositionsImpl extends RegisterPositions {
 
   public RegisterPositionsImpl(int limit) {
     this.limit = limit;
-    backing = new int[INITIAL_SIZE];
-    for (int i = 0; i < INITIAL_SIZE; i++) {
-      backing[i] = Integer.MAX_VALUE;
-    }
     registerHoldsConstant = new BitSet(limit);
     registerHoldsMonitor = new BitSet(limit);
     registerHoldsNewStringInstanceDisallowingSpilling = new BitSet(limit);
@@ -62,6 +58,10 @@ public class RegisterPositionsImpl extends RegisterPositions {
   }
 
   private void set(int index, int value) {
+    if (backing == null) {
+      backing = new int[INITIAL_SIZE];
+      Arrays.fill(backing, Integer.MAX_VALUE);
+    }
     if (index >= backing.length) {
       grow(index + 1);
     }
@@ -80,7 +80,7 @@ public class RegisterPositionsImpl extends RegisterPositions {
   @Override
   public int get(int index) {
     assert !isBlocked(index);
-    if (index < backing.length) {
+    if (backing != null && index < backing.length) {
       return backing[index];
     }
     assert index < limit;

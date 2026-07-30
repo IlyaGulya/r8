@@ -17,6 +17,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
@@ -27,11 +28,9 @@ public class AffectedValues implements Set<Value> {
 
   private static final AffectedValues EMPTY = new AffectedValues(ImmutableSet.of());
 
-  private final Set<Value> affectedValues;
+  private Set<Value> affectedValues;
 
-  public AffectedValues() {
-    this(Sets.newIdentityHashSet());
-  }
+  public AffectedValues() {}
 
   private AffectedValues(Set<Value> affectedValues) {
     this.affectedValues = affectedValues;
@@ -98,12 +97,12 @@ public class AffectedValues implements Set<Value> {
 
   @Override
   public boolean add(Value value) {
-    return affectedValues.add(value);
+    return getOrCreateAffectedValues().add(value);
   }
 
   @Override
   public boolean addAll(Collection<? extends Value> c) {
-    return affectedValues.addAll(c);
+    return c.isEmpty() ? false : getOrCreateAffectedValues().addAll(c);
   }
 
   public void addLiveAffectedValuesOf(Value value, Predicate<BasicBlock> removedBlocks) {
@@ -116,17 +115,20 @@ public class AffectedValues implements Set<Value> {
 
   @Override
   public void clear() {
-    affectedValues.clear();
+    if (affectedValues != null) {
+      affectedValues.clear();
+      affectedValues = null;
+    }
   }
 
   @Override
   public boolean contains(Object o) {
-    return affectedValues.contains(o);
+    return affectedValues != null && affectedValues.contains(o);
   }
 
   @Override
   public boolean containsAll(Collection<?> c) {
-    return affectedValues.containsAll(c);
+    return affectedValues != null ? affectedValues.containsAll(c) : c.isEmpty();
   }
 
   public boolean hasNext() {
@@ -135,41 +137,54 @@ public class AffectedValues implements Set<Value> {
 
   @Override
   public boolean isEmpty() {
-    return affectedValues.isEmpty();
+    return affectedValues == null || affectedValues.isEmpty();
   }
 
   @Override
   public Iterator<Value> iterator() {
-    return affectedValues.iterator();
+    return affectedValues != null ? affectedValues.iterator() : Collections.emptyIterator();
   }
 
   @Override
   public boolean remove(Object o) {
-    return affectedValues.remove(o);
+    return affectedValues != null && affectedValues.remove(o);
   }
 
   @Override
   public boolean removeAll(Collection<?> c) {
-    return affectedValues.removeAll(c);
+    return affectedValues != null && affectedValues.removeAll(c);
   }
 
   @Override
   public boolean retainAll(Collection<?> c) {
-    return affectedValues.retainAll(c);
+    return affectedValues != null && affectedValues.retainAll(c);
   }
 
   @Override
   public int size() {
-    return affectedValues.size();
+    return affectedValues != null ? affectedValues.size() : 0;
   }
 
   @Override
   public Object[] toArray() {
-    return affectedValues.toArray();
+    return affectedValues != null ? affectedValues.toArray() : new Object[0];
   }
 
   @Override
   public <T> T[] toArray(T[] a) {
-    return affectedValues.toArray(a);
+    if (affectedValues != null) {
+      return affectedValues.toArray(a);
+    }
+    if (a.length > 0) {
+      a[0] = null;
+    }
+    return a;
+  }
+
+  private Set<Value> getOrCreateAffectedValues() {
+    if (affectedValues == null) {
+      affectedValues = Sets.newIdentityHashSet();
+    }
+    return affectedValues;
   }
 }

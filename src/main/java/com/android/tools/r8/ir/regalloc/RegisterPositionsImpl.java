@@ -6,42 +6,38 @@ package com.android.tools.r8.ir.regalloc;
 
 import com.android.tools.r8.errors.Unreachable;
 import java.util.Arrays;
-import java.util.BitSet;
 
 public class RegisterPositionsImpl extends RegisterPositions {
 
   private static final int INITIAL_SIZE = 16;
+  private static final long POSITION_MASK = 0xffffffffL;
+  private static final long HAS_POSITION = 1L << 32;
+  private static final long HOLDS_CONSTANT = 1L << 33;
+  private static final long HOLDS_MONITOR = 1L << 34;
+  private static final long HOLDS_NEW_STRING_INSTANCE_DISALLOWING_SPILLING = 1L << 35;
+  private static final long REGISTER_TYPE_MASK =
+      HOLDS_CONSTANT | HOLDS_MONITOR | HOLDS_NEW_STRING_INSTANCE_DISALLOWING_SPILLING;
+  private static final long BLOCKED = 1L << 36;
   private final int limit;
-  private int[] backing;
-  private final BitSet registerHoldsConstant;
-  private final BitSet registerHoldsMonitor;
-  private final BitSet registerHoldsNewStringInstanceDisallowingSpilling;
-  private final BitSet blockedRegisters;
+  private long[] registerState;
 
   public RegisterPositionsImpl(int limit) {
     this.limit = limit;
-    backing = new int[INITIAL_SIZE];
-    for (int i = 0; i < INITIAL_SIZE; i++) {
-      backing[i] = Integer.MAX_VALUE;
-    }
-    registerHoldsConstant = new BitSet(limit);
-    registerHoldsMonitor = new BitSet(limit);
-    registerHoldsNewStringInstanceDisallowingSpilling = new BitSet(limit);
-    blockedRegisters = new BitSet(limit);
+    // Wide register queries may inspect the register immediately after the limit.
+    registerState = new long[Math.min(INITIAL_SIZE, limit + 1)];
   }
 
   @Override
   public boolean hasType(int index, RegisterType type) {
     assert !isBlocked(index);
+    long state = getState(index);
     switch (type) {
       case MONITOR:
-        return holdsMonitor(index);
+        return (state & HOLDS_MONITOR) != 0;
       case CONST_NUMBER:
-        return holdsConstant(index);
+        return (state & HOLDS_CONSTANT) != 0;
       case OTHER:
-        return !holdsMonitor(index)
-            && !holdsConstant(index)
-            && !holdsNewStringInstanceDisallowingSpilling(index);
+        return (state & REGISTER_TYPE_MASK) == 0;
       case ANY:
         return true;
       default:
@@ -49,39 +45,38 @@ public class RegisterPositionsImpl extends RegisterPositions {
     }
   }
 
-  private boolean holdsConstant(int index) {
-    return registerHoldsConstant.get(index);
-  }
-
-  private boolean holdsMonitor(int index) {
-    return registerHoldsMonitor.get(index);
-  }
-
-  private boolean holdsNewStringInstanceDisallowingSpilling(int index) {
-    return registerHoldsNewStringInstanceDisallowingSpilling.get(index);
+  private long getState(int index) {
+    return index < registerState.length ? registerState[index] : 0;
   }
 
   private void set(int index, int value) {
-    if (index >= backing.length) {
-      grow(index + 1);
-    }
-    backing[index] = value;
+    ensureCapacity(index);
+    registerState[index] =
+        (registerState[index] & ~POSITION_MASK) | HAS_POSITION | (value & POSITION_MASK);
   }
 
   @Override
   public void set(int index, int value, LiveIntervals intervals) {
     set(index, value);
-    registerHoldsConstant.set(index, intervals.isConstantNumberInterval());
-    registerHoldsMonitor.set(index, intervals.usedInMonitorOperation());
-    registerHoldsNewStringInstanceDisallowingSpilling.set(
-        index, intervals.isNewStringInstanceDisallowingSpilling());
+    long typeFlags = 0;
+    if (intervals.isConstantNumberInterval()) {
+      typeFlags |= HOLDS_CONSTANT;
+    }
+    if (intervals.usedInMonitorOperation()) {
+      typeFlags |= HOLDS_MONITOR;
+    }
+    if (intervals.isNewStringInstanceDisallowingSpilling()) {
+      typeFlags |= HOLDS_NEW_STRING_INSTANCE_DISALLOWING_SPILLING;
+    }
+    registerState[index] = (registerState[index] & ~REGISTER_TYPE_MASK) | typeFlags;
   }
 
   @Override
   public int get(int index) {
     assert !isBlocked(index);
-    if (index < backing.length) {
-      return backing[index];
+    long state = getState(index);
+    if ((state & HAS_POSITION) != 0) {
+      return (int) state;
     }
     assert index < limit;
     return Integer.MAX_VALUE;
@@ -94,24 +89,23 @@ public class RegisterPositionsImpl extends RegisterPositions {
 
   @Override
   public void setBlocked(int index) {
-    blockedRegisters.set(index);
+    ensureCapacity(index);
+    registerState[index] |= BLOCKED;
   }
 
   @Override
   public boolean isBlocked(int index) {
-    return blockedRegisters.get(index);
+    return (getState(index) & BLOCKED) != 0;
   }
 
-  private void grow(int minSize) {
-    int size = backing.length;
-    while (size < minSize) {
+  private void ensureCapacity(int index) {
+    if (index < registerState.length) {
+      return;
+    }
+    int size = registerState.length;
+    while (size <= index) {
       size *= 2;
     }
-    size = Math.min(size, limit);
-    int oldSize = backing.length;
-    backing = Arrays.copyOf(backing, size);
-    for (int i = oldSize; i < size; i++) {
-      backing[i] = Integer.MAX_VALUE;
-    }
+    registerState = Arrays.copyOf(registerState, Math.min(size, limit + 1));
   }
 }

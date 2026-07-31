@@ -18,7 +18,7 @@ public class RegisterPositionsImpl extends RegisterPositions {
   private static final int BLOCKED = 1 << 3;
   private final int limit;
   private int[] backing;
-  private final byte[] registerFlags;
+  private byte[] registerFlags;
 
   public RegisterPositionsImpl(int limit) {
     this.limit = limit;
@@ -26,25 +26,31 @@ public class RegisterPositionsImpl extends RegisterPositions {
     for (int i = 0; i < INITIAL_SIZE; i++) {
       backing[i] = Integer.MAX_VALUE;
     }
-    // Wide register queries may inspect the register immediately after the limit.
+    // Most accesses stay below the limit. Reads outside the plane are empty, matching BitSet,
+    // while the rare write outside the expected range grows the packed plane.
     registerFlags = new byte[limit + 1];
   }
 
   @Override
   public boolean hasType(int index, RegisterType type) {
     assert !isBlocked(index);
+    int flags = getFlags(index);
     switch (type) {
       case MONITOR:
-        return (registerFlags[index] & HOLDS_MONITOR) != 0;
+        return (flags & HOLDS_MONITOR) != 0;
       case CONST_NUMBER:
-        return (registerFlags[index] & HOLDS_CONSTANT) != 0;
+        return (flags & HOLDS_CONSTANT) != 0;
       case OTHER:
-        return (registerFlags[index] & REGISTER_TYPE_MASK) == 0;
+        return (flags & REGISTER_TYPE_MASK) == 0;
       case ANY:
         return true;
       default:
         throw new Unreachable("Unexpected register position type: " + type);
     }
+  }
+
+  private int getFlags(int index) {
+    return index < registerFlags.length ? registerFlags[index] : 0;
   }
 
   private void set(int index, int value) {
@@ -57,6 +63,7 @@ public class RegisterPositionsImpl extends RegisterPositions {
   @Override
   public void set(int index, int value, LiveIntervals intervals) {
     set(index, value);
+    ensureFlags(index);
     int flags = registerFlags[index] & BLOCKED;
     if (intervals.isConstantNumberInterval()) {
       flags |= HOLDS_CONSTANT;
@@ -87,12 +94,20 @@ public class RegisterPositionsImpl extends RegisterPositions {
 
   @Override
   public void setBlocked(int index) {
+    ensureFlags(index);
     registerFlags[index] |= BLOCKED;
   }
 
   @Override
   public boolean isBlocked(int index) {
-    return (registerFlags[index] & BLOCKED) != 0;
+    return (getFlags(index) & BLOCKED) != 0;
+  }
+
+  private void ensureFlags(int index) {
+    if (index >= registerFlags.length) {
+      registerFlags =
+          Arrays.copyOf(registerFlags, Math.max(index + 1, registerFlags.length * 2));
+    }
   }
 
   private void grow(int minSize) {

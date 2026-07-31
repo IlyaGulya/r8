@@ -2733,7 +2733,7 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
   private void allocateBlockedRegister(LiveIntervals unhandledInterval, int registerConstraint) {
     // Initialize all candidate registers to Integer.MAX_VALUE.
     RegisterPositions usePositions = new RegisterPositionsImpl(registerConstraint + 1);
-    RegisterPositions blockedPositions = new RegisterPositionsImpl(registerConstraint + 1);
+    RegisterPositions blockedPositions = new PlainRegisterPositions(registerConstraint + 1);
 
     // Compute next use location for all currently active registers.
     for (LiveIntervals intervals : active) {

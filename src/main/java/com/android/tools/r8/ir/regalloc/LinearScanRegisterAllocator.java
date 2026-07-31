@@ -228,6 +228,9 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
   private ArgumentReuseMode mode;
   // The set of registers that are free for allocation.
   private IntSortedSet freeRegisters = new IntRBTreeSet();
+  // Scratch state for one free-register decision. Entries from the previous decision are hidden
+  // by an epoch rather than cleared or reallocated.
+  private final ReusableRegisterPositions reusableFreePositions = new ReusableRegisterPositions();
   // The max register number used.
   private int maxRegisterNumber = -1;
 
@@ -2173,7 +2176,7 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
   private RegisterPositions computeFreePositions(
       LiveIntervals unhandledInterval, int registerConstraint) {
     // Set all free positions for possible registers to max integer.
-    RegisterPositions freePositions = new RegisterPositionsImpl(registerConstraint + 1);
+    RegisterPositions freePositions = reusableFreePositions.reset(registerConstraint + 1);
 
     if (options().shouldCompileMethodInDebugMode(code.context())
         && !code.context().getAccessFlags().isStatic()) {

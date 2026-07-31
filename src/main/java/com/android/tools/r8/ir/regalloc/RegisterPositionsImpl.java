@@ -11,11 +11,14 @@ import java.util.BitSet;
 public class RegisterPositionsImpl extends RegisterPositions {
 
   private static final int INITIAL_SIZE = 16;
+  private static final int HOLDS_CONSTANT = 1;
+  private static final int HOLDS_MONITOR = 1 << 1;
+  private static final int HOLDS_NEW_STRING_INSTANCE_DISALLOWING_SPILLING = 1 << 2;
+  private static final int REGISTER_TYPE_MASK =
+      HOLDS_CONSTANT | HOLDS_MONITOR | HOLDS_NEW_STRING_INSTANCE_DISALLOWING_SPILLING;
   private final int limit;
   private int[] backing;
-  private BitSet registerHoldsConstant;
-  private BitSet registerHoldsMonitor;
-  private BitSet registerHoldsNewStringInstanceDisallowingSpilling;
+  private byte[] registerTypes;
   private final BitSet blockedRegisters;
 
   public RegisterPositionsImpl(int limit) {
@@ -30,15 +33,14 @@ public class RegisterPositionsImpl extends RegisterPositions {
   @Override
   public boolean hasType(int index, RegisterType type) {
     assert !isBlocked(index);
+    int flags = getTypeFlags(index);
     switch (type) {
       case MONITOR:
-        return holdsMonitor(index);
+        return (flags & HOLDS_MONITOR) != 0;
       case CONST_NUMBER:
-        return holdsConstant(index);
+        return (flags & HOLDS_CONSTANT) != 0;
       case OTHER:
-        return !holdsMonitor(index)
-            && !holdsConstant(index)
-            && !holdsNewStringInstanceDisallowingSpilling(index);
+        return (flags & REGISTER_TYPE_MASK) == 0;
       case ANY:
         return true;
       default:
@@ -46,28 +48,8 @@ public class RegisterPositionsImpl extends RegisterPositions {
     }
   }
 
-  private boolean holdsConstant(int index) {
-    return registerHoldsConstant != null && registerHoldsConstant.get(index);
-  }
-
-  private boolean holdsMonitor(int index) {
-    return registerHoldsMonitor != null && registerHoldsMonitor.get(index);
-  }
-
-  private boolean holdsNewStringInstanceDisallowingSpilling(int index) {
-    return registerHoldsNewStringInstanceDisallowingSpilling != null
-        && registerHoldsNewStringInstanceDisallowingSpilling.get(index);
-  }
-
-  private BitSet setBit(BitSet bits, int index, boolean value) {
-    if (bits == null) {
-      if (!value) {
-        return null;
-      }
-      bits = new BitSet(limit);
-    }
-    bits.set(index, value);
-    return bits;
+  private int getTypeFlags(int index) {
+    return registerTypes != null && index < registerTypes.length ? registerTypes[index] : 0;
   }
 
   private void set(int index, int value) {
@@ -80,14 +62,22 @@ public class RegisterPositionsImpl extends RegisterPositions {
   @Override
   public void set(int index, int value, LiveIntervals intervals) {
     set(index, value);
-    registerHoldsConstant =
-        setBit(registerHoldsConstant, index, intervals.isConstantNumberInterval());
-    registerHoldsMonitor = setBit(registerHoldsMonitor, index, intervals.usedInMonitorOperation());
-    registerHoldsNewStringInstanceDisallowingSpilling =
-        setBit(
-            registerHoldsNewStringInstanceDisallowingSpilling,
-            index,
-            intervals.isNewStringInstanceDisallowingSpilling());
+    int flags = 0;
+    if (intervals.isConstantNumberInterval()) {
+      flags |= HOLDS_CONSTANT;
+    }
+    if (intervals.usedInMonitorOperation()) {
+      flags |= HOLDS_MONITOR;
+    }
+    if (intervals.isNewStringInstanceDisallowingSpilling()) {
+      flags |= HOLDS_NEW_STRING_INSTANCE_DISALLOWING_SPILLING;
+    }
+    if (flags != 0) {
+      ensureTypeFlags(index);
+      registerTypes[index] = (byte) flags;
+    } else if (registerTypes != null && index < registerTypes.length) {
+      registerTypes[index] = 0;
+    }
   }
 
   @Override
@@ -113,6 +103,22 @@ public class RegisterPositionsImpl extends RegisterPositions {
   @Override
   public boolean isBlocked(int index) {
     return blockedRegisters.get(index);
+  }
+
+  private void ensureTypeFlags(int index) {
+    if (registerTypes == null) {
+      int size = INITIAL_SIZE;
+      while (size <= index) {
+        size *= 2;
+      }
+      registerTypes = new byte[size];
+    } else if (index >= registerTypes.length) {
+      int size = registerTypes.length;
+      while (size <= index) {
+        size *= 2;
+      }
+      registerTypes = Arrays.copyOf(registerTypes, size);
+    }
   }
 
   private void grow(int minSize) {

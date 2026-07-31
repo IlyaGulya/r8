@@ -16,9 +16,13 @@ public class RegisterPositionsImpl extends RegisterPositions {
   private static final int REGISTER_TYPE_MASK =
       HOLDS_CONSTANT | HOLDS_MONITOR | HOLDS_NEW_STRING_INSTANCE_DISALLOWING_SPILLING;
   private static final int BLOCKED = 1 << 3;
+  private static final int BITS_PER_REGISTER = 4;
+  private static final int INLINE_REGISTER_COUNT = Long.SIZE / BITS_PER_REGISTER;
+  private static final long REGISTER_FLAGS_MASK = (1L << BITS_PER_REGISTER) - 1;
   private final int limit;
   private int[] backing;
-  private byte[] registerFlags;
+  private long inlineRegisterFlags;
+  private byte[] overflowRegisterFlags;
 
   public RegisterPositionsImpl(int limit) {
     this.limit = limit;
@@ -26,9 +30,6 @@ public class RegisterPositionsImpl extends RegisterPositions {
     for (int i = 0; i < INITIAL_SIZE; i++) {
       backing[i] = Integer.MAX_VALUE;
     }
-    // Most accesses stay below the limit. Reads outside the plane are empty, matching BitSet,
-    // while the rare write outside the expected range grows the packed plane.
-    registerFlags = new byte[limit + 1];
   }
 
   @Override
@@ -50,7 +51,13 @@ public class RegisterPositionsImpl extends RegisterPositions {
   }
 
   private int getFlags(int index) {
-    return index < registerFlags.length ? registerFlags[index] : 0;
+    if (index < INLINE_REGISTER_COUNT) {
+      return (int) ((inlineRegisterFlags >>> (index * BITS_PER_REGISTER)) & REGISTER_FLAGS_MASK);
+    }
+    int overflowIndex = index - INLINE_REGISTER_COUNT;
+    return overflowRegisterFlags != null && overflowIndex < overflowRegisterFlags.length
+        ? overflowRegisterFlags[overflowIndex]
+        : 0;
   }
 
   private void set(int index, int value) {
@@ -63,8 +70,7 @@ public class RegisterPositionsImpl extends RegisterPositions {
   @Override
   public void set(int index, int value, LiveIntervals intervals) {
     set(index, value);
-    ensureFlags(index);
-    int flags = registerFlags[index] & BLOCKED;
+    int flags = getFlags(index) & BLOCKED;
     if (intervals.isConstantNumberInterval()) {
       flags |= HOLDS_CONSTANT;
     }
@@ -74,7 +80,7 @@ public class RegisterPositionsImpl extends RegisterPositions {
     if (intervals.isNewStringInstanceDisallowingSpilling()) {
       flags |= HOLDS_NEW_STRING_INSTANCE_DISALLOWING_SPILLING;
     }
-    registerFlags[index] = (byte) flags;
+    setFlags(index, flags);
   }
 
   @Override
@@ -94,8 +100,7 @@ public class RegisterPositionsImpl extends RegisterPositions {
 
   @Override
   public void setBlocked(int index) {
-    ensureFlags(index);
-    registerFlags[index] |= BLOCKED;
+    setFlags(index, getFlags(index) | BLOCKED);
   }
 
   @Override
@@ -103,11 +108,24 @@ public class RegisterPositionsImpl extends RegisterPositions {
     return (getFlags(index) & BLOCKED) != 0;
   }
 
-  private void ensureFlags(int index) {
-    if (index >= registerFlags.length) {
-      registerFlags =
-          Arrays.copyOf(registerFlags, Math.max(index + 1, registerFlags.length * 2));
+  private void setFlags(int index, int flags) {
+    if (index < INLINE_REGISTER_COUNT) {
+      int shift = index * BITS_PER_REGISTER;
+      inlineRegisterFlags =
+          (inlineRegisterFlags & ~(REGISTER_FLAGS_MASK << shift))
+              | (((long) flags & REGISTER_FLAGS_MASK) << shift);
+      return;
     }
+    int overflowIndex = index - INLINE_REGISTER_COUNT;
+    if (overflowRegisterFlags == null) {
+      overflowRegisterFlags = new byte[Math.max(INITIAL_SIZE, overflowIndex + 1)];
+    } else if (overflowIndex >= overflowRegisterFlags.length) {
+      overflowRegisterFlags =
+          Arrays.copyOf(
+              overflowRegisterFlags,
+              Math.max(overflowIndex + 1, overflowRegisterFlags.length * 2));
+    }
+    overflowRegisterFlags[overflowIndex] = (byte) flags;
   }
 
   private void grow(int minSize) {

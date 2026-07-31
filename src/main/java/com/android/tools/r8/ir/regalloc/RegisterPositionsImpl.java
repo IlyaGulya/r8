@@ -106,9 +106,12 @@ public class RegisterPositionsImpl extends RegisterPositions {
     if (index < INLINE_REGISTER_COUNT) {
       inlineRegisterFlags |= (long) BLOCKED << (index * BITS_PER_REGISTER);
     } else {
-      int overflowIndex = index - INLINE_REGISTER_COUNT;
-      setOverflowFlags(overflowIndex, getOverflowFlags(overflowIndex) | BLOCKED);
+      setOverflowBlocked(index - INLINE_REGISTER_COUNT);
     }
+  }
+
+  private void setOverflowBlocked(int overflowIndex) {
+    setOverflowFlags(overflowIndex, getOverflowFlags(overflowIndex) | BLOCKED);
   }
 
   @Override

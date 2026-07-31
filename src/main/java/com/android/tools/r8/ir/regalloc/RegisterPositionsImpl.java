@@ -26,8 +26,9 @@ public class RegisterPositionsImpl extends RegisterPositions {
     for (int i = 0; i < INITIAL_SIZE; i++) {
       backing[i] = Integer.MAX_VALUE;
     }
-    // Wide register queries may inspect the register immediately after the limit.
-    registerFlags = new byte[Math.min(INITIAL_SIZE, limit + 1)];
+    // Keep the hot prefix compact. Reads outside the plane are empty, matching BitSet, while
+    // writes grow based on the actual register index instead of the conservative limit.
+    registerFlags = new byte[INITIAL_SIZE];
   }
 
   @Override
@@ -103,14 +104,10 @@ public class RegisterPositionsImpl extends RegisterPositions {
   }
 
   private void ensureFlags(int index) {
-    if (index < registerFlags.length) {
-      return;
+    if (index >= registerFlags.length) {
+      registerFlags =
+          Arrays.copyOf(registerFlags, Math.max(index + 1, registerFlags.length * 2));
     }
-    int size = registerFlags.length;
-    while (size <= index) {
-      size *= 2;
-    }
-    registerFlags = Arrays.copyOf(registerFlags, Math.min(size, limit + 1));
   }
 
   private void grow(int minSize) {

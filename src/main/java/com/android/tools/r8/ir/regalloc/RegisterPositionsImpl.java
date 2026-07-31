@@ -54,7 +54,10 @@ public class RegisterPositionsImpl extends RegisterPositions {
     if (index < INLINE_REGISTER_COUNT) {
       return (int) ((inlineRegisterFlags >>> (index * BITS_PER_REGISTER)) & REGISTER_FLAGS_MASK);
     }
-    int overflowIndex = index - INLINE_REGISTER_COUNT;
+    return getOverflowFlags(index - INLINE_REGISTER_COUNT);
+  }
+
+  private int getOverflowFlags(int overflowIndex) {
     return overflowRegisterFlags != null && overflowIndex < overflowRegisterFlags.length
         ? overflowRegisterFlags[overflowIndex]
         : 0;
@@ -100,7 +103,12 @@ public class RegisterPositionsImpl extends RegisterPositions {
 
   @Override
   public void setBlocked(int index) {
-    setFlags(index, getFlags(index) | BLOCKED);
+    if (index < INLINE_REGISTER_COUNT) {
+      inlineRegisterFlags |= (long) BLOCKED << (index * BITS_PER_REGISTER);
+    } else {
+      int overflowIndex = index - INLINE_REGISTER_COUNT;
+      setOverflowFlags(overflowIndex, getOverflowFlags(overflowIndex) | BLOCKED);
+    }
   }
 
   @Override
@@ -116,7 +124,10 @@ public class RegisterPositionsImpl extends RegisterPositions {
               | (((long) flags & REGISTER_FLAGS_MASK) << shift);
       return;
     }
-    int overflowIndex = index - INLINE_REGISTER_COUNT;
+    setOverflowFlags(index - INLINE_REGISTER_COUNT, flags);
+  }
+
+  private void setOverflowFlags(int overflowIndex, int flags) {
     if (overflowRegisterFlags == null) {
       overflowRegisterFlags = new byte[Math.max(INITIAL_SIZE, overflowIndex + 1)];
     } else if (overflowIndex >= overflowRegisterFlags.length) {

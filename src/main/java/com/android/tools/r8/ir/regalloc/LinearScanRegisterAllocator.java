@@ -237,9 +237,9 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
   // List of all top-level live intervals for all SSA values.
   private List<LiveIntervals> liveIntervals = new ArrayList<>();
   // List of active intervals.
-  private List<LiveIntervals> active = new ArrayList<>();
+  private ArrayList<LiveIntervals> active = new ArrayList<>();
   // List of intervals where the current instruction falls into one of their live range holes.
-  protected List<LiveIntervals> inactive = new ArrayList<>();
+  protected ArrayList<LiveIntervals> inactive = new ArrayList<>();
   // List of intervals that no register has been allocated to sorted by first live range.
   protected PriorityQueue<LiveIntervals> unhandled = new PriorityQueue<>();
 
@@ -1321,11 +1321,11 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
   private void advanceStateToLiveIntervals(LiveIntervals unhandledInterval) {
     int start = unhandledInterval.getStart();
     // Check for active intervals that expired or became inactive.
-    Iterator<LiveIntervals> activeIterator = active.iterator();
-    while (activeIterator.hasNext()) {
-      LiveIntervals activeIntervals = activeIterator.next();
+    int activeWriteIndex = 0;
+    int activeSize = active.size();
+    for (int activeReadIndex = 0; activeReadIndex < activeSize; activeReadIndex++) {
+      LiveIntervals activeIntervals = active.get(activeReadIndex);
       if (start >= activeIntervals.getEnd()) {
-        activeIterator.remove();
         freeOccupiedRegistersForIntervals(activeIntervals);
         if (start == activeIntervals.getEnd()) {
           expiredHere.add(activeIntervals.getRegister());
@@ -1334,19 +1334,24 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
           }
         }
       } else if (!activeIntervals.overlapsPosition(start)) {
-        activeIterator.remove();
         assert activeIntervals.hasRegister();
         inactive.add(activeIntervals);
         freeOccupiedRegistersForIntervals(activeIntervals);
+      } else {
+        if (activeWriteIndex != activeReadIndex) {
+          active.set(activeWriteIndex, activeIntervals);
+        }
+        activeWriteIndex++;
       }
     }
+    truncateList(active, activeWriteIndex);
 
     // Check for inactive intervals that expired or became reactivated.
-    Iterator<LiveIntervals> inactiveIterator = inactive.iterator();
-    while (inactiveIterator.hasNext()) {
-      LiveIntervals inactiveIntervals = inactiveIterator.next();
+    int inactiveWriteIndex = 0;
+    int inactiveSize = inactive.size();
+    for (int inactiveReadIndex = 0; inactiveReadIndex < inactiveSize; inactiveReadIndex++) {
+      LiveIntervals inactiveIntervals = inactive.get(inactiveReadIndex);
       if (start >= inactiveIntervals.getEnd()) {
-        inactiveIterator.remove();
         if (start == inactiveIntervals.getEnd()) {
           expiredHere.add(inactiveIntervals.getRegister());
           if (inactiveIntervals.getType().isWide()) {
@@ -1354,11 +1359,22 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
           }
         }
       } else if (inactiveIntervals.overlapsPosition(start)) {
-        inactiveIterator.remove();
         assert inactiveIntervals.hasRegister();
         active.add(inactiveIntervals);
         takeFreeRegistersForIntervals(inactiveIntervals);
+      } else {
+        if (inactiveWriteIndex != inactiveReadIndex) {
+          inactive.set(inactiveWriteIndex, inactiveIntervals);
+        }
+        inactiveWriteIndex++;
       }
+    }
+    truncateList(inactive, inactiveWriteIndex);
+  }
+
+  private static void truncateList(ArrayList<?> list, int size) {
+    for (int index = list.size() - 1; index >= size; index--) {
+      list.remove(index);
     }
   }
 

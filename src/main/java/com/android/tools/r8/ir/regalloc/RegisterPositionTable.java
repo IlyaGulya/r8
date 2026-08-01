@@ -10,17 +10,17 @@ import java.util.Arrays;
 final class RegisterPositionTable {
 
   private static final int INITIAL_SIZE = 16;
-  private static final int MAX_EPOCH = 0xff;
+  private static final int MAX_EPOCH = 0xffff;
 
   private int[] positions = new int[INITIAL_SIZE];
-  private byte[] epochs = new byte[INITIAL_SIZE];
+  private short[] epochs = new short[INITIAL_SIZE];
   private int epoch;
   private int limit;
 
   RegisterPositionTable reset(int limit) {
     this.limit = limit;
     if (epoch == MAX_EPOCH) {
-      Arrays.fill(epochs, (byte) 0);
+      Arrays.fill(epochs, (short) 0);
       epoch = 1;
     } else {
       epoch++;
@@ -29,7 +29,7 @@ final class RegisterPositionTable {
   }
 
   int get(int index) {
-    if (index < positions.length && epochs[index] == (byte) epoch) {
+    if (index < positions.length && epochs[index] == (short) epoch) {
       return positions[index];
     }
     assert index < limit;
@@ -46,7 +46,7 @@ final class RegisterPositionTable {
       grow(index + 1);
     }
     positions[index] = position;
-    epochs[index] = (byte) epoch;
+    epochs[index] = (short) epoch;
   }
 
   private void grow(int minSize) {

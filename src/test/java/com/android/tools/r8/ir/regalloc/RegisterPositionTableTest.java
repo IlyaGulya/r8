@@ -35,7 +35,7 @@ public class RegisterPositionTableTest {
     assertEquals(168, positions.get(15));
     assertEquals(Integer.MAX_VALUE, positions.get(31));
 
-    for (int i = 0; i < 255; i++) {
+    for (int i = 0; i < 65_535; i++) {
       positions.reset(32);
       assertEquals(Integer.MAX_VALUE, positions.get(15));
     }

@@ -297,6 +297,23 @@ pub struct GitHubMatrix<'a> {
     pub include: &'a [ExpandedCell],
 }
 
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct GitHubStrategyCell<'a>(pub &'a str, pub &'a str, pub &'a str, pub &'a [String]);
+
+pub fn github_strategy_cells(cells: &[ExpandedCell]) -> Vec<GitHubStrategyCell<'_>> {
+    cells
+        .iter()
+        .map(|cell| {
+            GitHubStrategyCell(
+                &cell.id,
+                &cell.java_distribution,
+                &cell.java_version,
+                &cell.runner_labels,
+            )
+        })
+        .collect()
+}
+
 impl ExperimentPlan {
     pub fn from_toml_file(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path)
@@ -1110,6 +1127,19 @@ mod tests {
         assert_eq!(expanded.cells[0].kind, CellKind::StandaloneTiming);
         assert_eq!(expanded.cells[3].kind, CellKind::StandaloneDiagnostic);
         assert!(expanded.cells[0].result_uri.contains(&expanded.plan_sha256));
+    }
+
+    #[test]
+    fn serializes_job_output_strategy_as_compact_tuples() {
+        let expanded = sample_plan().expand().unwrap();
+        let rows = github_strategy_cells(&expanded.cells[..1]);
+        assert_eq!(
+            serde_json::to_string(&rows).unwrap(),
+            format!(
+                "[[\"{}\",\"zulu\",\"21.0.6\",[\"self-hosted\",\"linux\"]]]",
+                expanded.cells[0].id
+            )
+        );
     }
 
     #[test]

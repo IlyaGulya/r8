@@ -406,32 +406,9 @@ pub fn prepare_cell(request: PrepareCellRequest<'_>) -> Result<PreparedCell> {
             &expected_outputs,
             &request.plan.input.expected_outputs_sha256,
         )?;
-        let listing = run_checked(
-            request.tar,
-            &["--list", "--file", input_archive.to_string_lossy().as_ref()],
-        )?;
-        for entry in String::from_utf8(listing.stdout)
-            .context("tar listing is not UTF-8")?
-            .lines()
-        {
-            let entry = entry.trim_end_matches('/');
-            ensure!(
-                entry.is_empty() || is_safe_relative_path(entry),
-                "unsafe input archive entry {entry}"
-            );
-        }
         let input_dir = request.output_dir.join("input");
         fs::create_dir(&input_dir)?;
-        run_checked(
-            request.tar,
-            &[
-                "--extract",
-                "--file",
-                input_archive.to_string_lossy().as_ref(),
-                "--directory",
-                input_dir.to_string_lossy().as_ref(),
-            ],
-        )?;
+        extract_input_archive(&input_archive, &input_dir)?;
         (
             Some(input_archive.into()),
             Some(input_dir.into()),
@@ -445,6 +422,50 @@ pub fn prepare_cell(request: PrepareCellRequest<'_>) -> Result<PreparedCell> {
         input_dir,
         expected_outputs,
     })
+}
+
+fn extract_input_archive(archive_path: &Path, output_dir: &Path) -> Result<()> {
+    let file = File::open(archive_path)
+        .with_context(|| format!("failed to open input archive {}", archive_path.display()))?;
+    let decoder = zstd::Decoder::new(file).context("failed to open zstd input archive")?;
+    let mut archive = tar::Archive::new(decoder);
+    let mut extracted = BTreeSet::new();
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let relative = entry
+            .path()?
+            .to_str()
+            .context("input archive path is not UTF-8")?
+            .trim_end_matches('/')
+            .to_string();
+        ensure!(
+            is_safe_relative_path(&relative),
+            "unsafe input archive entry {relative}"
+        );
+        ensure!(
+            extracted.insert(relative.clone()),
+            "duplicate input archive entry {relative}"
+        );
+        let destination = output_dir.join(&relative);
+        let entry_type = entry.header().entry_type();
+        if entry_type.is_dir() {
+            fs::create_dir_all(&destination)?;
+            continue;
+        }
+        ensure!(
+            entry_type.is_file(),
+            "unsupported input archive entry type for {relative}"
+        );
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut output = File::create(&destination)
+            .with_context(|| format!("failed to create input file {relative}"))?;
+        std::io::copy(&mut entry, &mut output)?;
+        output.flush()?;
+    }
+    ensure!(!extracted.is_empty(), "input archive is empty");
+    Ok(())
 }
 
 fn download(gcloud: &Path, uri: &str, destination: &Path) -> Result<()> {
@@ -741,5 +762,28 @@ mod tests {
         assert!(validate_repository("owner/repo").is_ok());
         assert!(validate_repository("owner/repo/extra").is_err());
         assert!(validate_repository("owner/repo\n--flag").is_err());
+    }
+
+    #[test]
+    fn extracts_zstd_input_without_external_tar_or_zstd() {
+        let root = tempdir().unwrap();
+        let source = root.path().join("r8-arguments.txt");
+        fs::write(&source, b"--release\n").unwrap();
+        let archive_path = root.path().join("input.tar.zst");
+        let encoder = zstd::Encoder::new(File::create(&archive_path).unwrap(), 1).unwrap();
+        let mut archive = tar::Builder::new(encoder.auto_finish());
+        archive
+            .append_path_with_name(&source, "r8-arguments.txt")
+            .unwrap();
+        archive.finish().unwrap();
+        drop(archive);
+
+        let output = root.path().join("input");
+        fs::create_dir(&output).unwrap();
+        extract_input_archive(&archive_path, &output).unwrap();
+        assert_eq!(
+            fs::read(output.join("r8-arguments.txt")).unwrap(),
+            b"--release\n"
+        );
     }
 }

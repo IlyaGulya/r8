@@ -17,7 +17,7 @@ use r8_benchctl::external::{
 use r8_benchctl::report::{aggregate_local, markdown};
 use r8_benchctl::{
     ExperimentPlan, GitHubMatrix, ensure_file_hash, evidence_manifest_schema,
-    experiment_plan_schema, parse_evidence_manifest, write_json,
+    experiment_plan_schema, github_strategy_cells, parse_evidence_manifest, write_json,
 };
 
 #[derive(Parser)]
@@ -655,21 +655,17 @@ fn run_plan(command: PlanCommand) -> Result<()> {
             writeln!(
                 file,
                 "standalone_timing_matrix={}",
-                serde_json::to_string(&GitHubMatrix {
-                    include: &standalone_timing
-                })?
+                serde_json::to_string(&github_strategy_cells(&standalone_timing))?
             )?;
             writeln!(
                 file,
                 "standalone_diagnostic_matrix={}",
-                serde_json::to_string(&GitHubMatrix {
-                    include: &standalone_diagnostic
-                })?
+                serde_json::to_string(&github_strategy_cells(&standalone_diagnostic))?
             )?;
             writeln!(
                 file,
                 "gradle_matrix={}",
-                serde_json::to_string(&GitHubMatrix { include: &gradle })?
+                serde_json::to_string(&github_strategy_cells(&gradle))?
             )?;
             writeln!(file, "standalone_timing_count={}", standalone_timing.len())?;
             writeln!(

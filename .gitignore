@@ -379,3 +379,4 @@ tools/*/dalvik-4.0.4.tar.gz
 tools/startup/__pycache__
 tools/**/*.success
 venv/
+.beads/

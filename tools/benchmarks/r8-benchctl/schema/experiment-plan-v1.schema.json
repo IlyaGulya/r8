@@ -1,0 +1,309 @@
+{
+  "$defs": {
+    "Comparison": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate": {
+          "type": "string"
+        },
+        "control": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "control",
+        "candidate"
+      ],
+      "type": "object"
+    },
+    "DiagnosticsSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "jit_targets": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "max_parallel": {
+          "default": 1,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "GarbageCollector": {
+      "enum": [
+        "g1",
+        "parallel"
+      ],
+      "type": "string"
+    },
+    "GradleCacheMode": {
+      "enum": [
+        "all",
+        "exclude-build-cache",
+        "disabled"
+      ],
+      "type": "string"
+    },
+    "GradleSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "android_commit": {
+          "default": "",
+          "type": "string"
+        },
+        "arguments": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "cleanup_tasks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "github_cache_modes": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/GradleCacheMode"
+          },
+          "type": "array"
+        },
+        "pairs": {
+          "default": 0,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tasks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "InputArtifact": {
+      "additionalProperties": false,
+      "properties": {
+        "archive_sha256": {
+          "type": "string"
+        },
+        "expected_outputs_sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "archive_sha256",
+        "expected_outputs_sha256"
+      ],
+      "type": "object"
+    },
+    "R8Artifact": {
+      "additionalProperties": false,
+      "properties": {
+        "commit": {
+          "type": "string"
+        },
+        "jar_sha256": {
+          "type": "string"
+        },
+        "repository": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "repository",
+        "commit",
+        "jar_sha256"
+      ],
+      "type": "object"
+    },
+    "RuntimeSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "active_processors": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "gc": {
+          "$ref": "#/$defs/GarbageCollector"
+        },
+        "id": {
+          "type": "string"
+        },
+        "java_distribution": {
+          "type": "string"
+        },
+        "java_version": {
+          "type": "string"
+        },
+        "r8_threads": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "runner_labels": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "xmx": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "java_distribution",
+        "java_version",
+        "gc",
+        "xmx",
+        "active_processors",
+        "r8_threads",
+        "runner_labels"
+      ],
+      "type": "object"
+    },
+    "StorageSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "root_uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "root_uri"
+      ],
+      "type": "object"
+    },
+    "TimingSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "cooldown_seconds": {
+          "default": 15,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pairs": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "pairs"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "artifacts": {
+      "additionalProperties": {
+        "$ref": "#/$defs/R8Artifact"
+      },
+      "type": "object"
+    },
+    "comparisons": {
+      "items": {
+        "$ref": "#/$defs/Comparison"
+      },
+      "type": "array"
+    },
+    "diagnostics": {
+      "$ref": "#/$defs/DiagnosticsSpec",
+      "default": {
+        "enabled": false,
+        "jit_targets": [],
+        "max_parallel": 1
+      }
+    },
+    "experiment_id": {
+      "type": "string"
+    },
+    "gradle": {
+      "$ref": "#/$defs/GradleSpec",
+      "default": {
+        "android_commit": "",
+        "arguments": [],
+        "cleanup_tasks": [],
+        "enabled": false,
+        "github_cache_modes": [],
+        "pairs": 0,
+        "tasks": []
+      }
+    },
+    "input": {
+      "$ref": "#/$defs/InputArtifact"
+    },
+    "max_parallel": {
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "runtimes": {
+      "items": {
+        "$ref": "#/$defs/RuntimeSpec"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "storage": {
+      "$ref": "#/$defs/StorageSpec"
+    },
+    "timing": {
+      "$ref": "#/$defs/TimingSpec"
+    }
+  },
+  "required": [
+    "schema_version",
+    "experiment_id",
+    "storage",
+    "max_parallel",
+    "artifacts",
+    "input",
+    "comparisons",
+    "runtimes",
+    "timing"
+  ],
+  "title": "ExperimentPlan",
+  "type": "object"
+}

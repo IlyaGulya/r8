@@ -231,6 +231,8 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
   // Scratch state for one free-register decision. Entries from the previous decision are hidden
   // by an epoch rather than cleared or reallocated.
   private final ReusableRegisterPositions reusableFreePositions = new ReusableRegisterPositions();
+  // Scratch positions for one blocked-register decision, resetting only written entries.
+  private final RegisterPositionTable reusableBlockedPositions = new RegisterPositionTable();
   // The max register number used.
   private int maxRegisterNumber = -1;
 
@@ -2726,7 +2728,8 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
   private void allocateBlockedRegister(LiveIntervals unhandledInterval, int registerConstraint) {
     // Initialize all candidate registers to Integer.MAX_VALUE.
     RegisterPositions usePositions = new RegisterPositionsImpl(registerConstraint + 1);
-    RegisterPositionTable blockedPositions = new RegisterPositionTable(registerConstraint + 1);
+    RegisterPositionTable blockedPositions =
+        reusableBlockedPositions.reset(registerConstraint + 1);
 
     // Compute next use location for all currently active registers.
     for (LiveIntervals intervals : active) {

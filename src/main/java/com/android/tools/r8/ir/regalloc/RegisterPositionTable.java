@@ -11,12 +11,22 @@ final class RegisterPositionTable {
 
   private static final int INITIAL_SIZE = 16;
 
-  private final int limit;
   private int[] positions = new int[INITIAL_SIZE];
+  private int[] touchedIndices = new int[0];
+  private int touchedSize;
+  private int limit;
 
-  RegisterPositionTable(int limit) {
-    this.limit = limit;
+  RegisterPositionTable() {
     Arrays.fill(positions, Integer.MAX_VALUE);
+  }
+
+  RegisterPositionTable reset(int limit) {
+    this.limit = limit;
+    for (int i = 0; i < touchedSize; i++) {
+      positions[touchedIndices[i]] = Integer.MAX_VALUE;
+    }
+    touchedSize = 0;
+    return this;
   }
 
   int get(int index) {
@@ -36,7 +46,18 @@ final class RegisterPositionTable {
     if (index >= positions.length) {
       grow(index + 1);
     }
+    if (positions[index] == Integer.MAX_VALUE) {
+      ensureTouchedCapacity();
+      touchedIndices[touchedSize++] = index;
+    }
     positions[index] = position;
+  }
+
+  private void ensureTouchedCapacity() {
+    if (touchedSize == touchedIndices.length) {
+      int size = Math.max(INITIAL_SIZE, touchedSize * 2);
+      touchedIndices = Arrays.copyOf(touchedIndices, size);
+    }
   }
 
   private void grow(int minSize) {

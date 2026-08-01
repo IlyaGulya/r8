@@ -2726,7 +2726,7 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
   private void allocateBlockedRegister(LiveIntervals unhandledInterval, int registerConstraint) {
     // Initialize all candidate registers to Integer.MAX_VALUE.
     RegisterPositions usePositions = new RegisterPositionsImpl(registerConstraint + 1);
-    RegisterPositions blockedPositions = new RegisterPositionsImpl(registerConstraint + 1);
+    RegisterPositionTable blockedPositions = new RegisterPositionTable(registerConstraint + 1);
 
     // Compute next use location for all currently active registers.
     for (LiveIntervals intervals : active) {
@@ -2835,7 +2835,7 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
     }
 
     int largestUsePosition = getLargestPosition(usePositions, candidate, needsRegisterPair);
-    int blockedPosition = getLargestPosition(blockedPositions, candidate, needsRegisterPair);
+    int blockedPosition = blockedPositions.get(candidate, needsRegisterPair);
 
     if (largestUsePosition < unhandledInterval.getFirstUse()) {
       // All active and inactive intervals are used before current. Therefore, it is best to spill
@@ -3065,7 +3065,7 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
       LiveIntervals unhandledInterval,
       int registerConstraint,
       RegisterPositions usePositions,
-      RegisterPositions blockedPositions) {
+      RegisterPositionTable blockedPositions) {
     // TODO(b/302281605): The only way there can be active invoke-range intervals is if we have a
     //  live intervals that have been split right before the invoke range instruction. If we had a
     //  mapping from instruction number to the invoke range instruction, we could find the invoke
@@ -3082,7 +3082,7 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
               if (register <= registerConstraint) {
                 int firstUse = intervals.firstUseAfter(unhandledInterval.getStart());
                 if (firstUse < blockedPositions.get(register)) {
-                  blockedPositions.set(register, firstUse, intervals);
+                  blockedPositions.set(register, firstUse);
                   // If we start blocking registers other than linked arguments, we might need to
                   // explicitly update the use positions as well as blocked positions.
                   assert usePositions.isBlocked(register)

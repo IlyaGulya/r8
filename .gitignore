@@ -365,3 +365,4 @@ tools/*/dalvik-4.0.4.tar.gz
 tools/*/dalvik.tar.gz
 tools/startup/__pycache__
 venv/
+.beads/

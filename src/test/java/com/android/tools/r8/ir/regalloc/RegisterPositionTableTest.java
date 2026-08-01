@@ -28,9 +28,13 @@ public class RegisterPositionTableTest {
     assertEquals(42, positions.get(15, true));
     assertEquals(84, positions.get(30, true));
 
+    for (int i = 0; i < 32; i++) {
+      positions.set(i, 1000 + i);
+    }
     positions.reset(32);
-    assertEquals(Integer.MAX_VALUE, positions.get(15));
-    assertEquals(Integer.MAX_VALUE, positions.get(31));
+    for (int i = 0; i < 32; i++) {
+      assertEquals(Integer.MAX_VALUE, positions.get(i));
+    }
     positions.set(31, 168);
     assertEquals(168, positions.get(31));
 

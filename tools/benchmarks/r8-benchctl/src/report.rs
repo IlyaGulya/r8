@@ -4,13 +4,15 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
+use std::fs;
 use std::path::Path;
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::cell::verify_manifest_files;
+use crate::external::VERIFIED_BUNDLE_MARKER;
 use crate::{
     CellKind, EvidenceManifest, EvidenceState, ExpandedCell, ExperimentPlan, GradleCacheMode,
     RunMetrics, Variant, parse_evidence_manifest,
@@ -116,7 +118,19 @@ pub fn aggregate_local(
             match parse_evidence_manifest(&manifest_path).and_then(|manifest| {
                 verify_identity(&manifest, &expanded.plan_sha256, cell)?;
                 if verify_files && manifest.state == EvidenceState::Complete {
-                    verify_manifest_files(&local_root, &manifest)?;
+                    let marker = local_root.join(VERIFIED_BUNDLE_MARKER);
+                    if marker.is_file() {
+                        let bundle = manifest
+                            .bundle
+                            .as_ref()
+                            .context("complete manifest has no evidence bundle")?;
+                        ensure!(
+                            fs::read_to_string(marker)?.trim() == bundle.sha256,
+                            "verified bundle marker differs"
+                        );
+                    } else {
+                        verify_manifest_files(&local_root, &manifest)?;
+                    }
                 }
                 Ok(manifest)
             }) {

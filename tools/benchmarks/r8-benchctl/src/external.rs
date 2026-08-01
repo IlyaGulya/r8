@@ -2,23 +2,27 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use anyhow::{Context, Result, bail, ensure};
 use chrono::{SecondsFormat, Utc};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use tempfile::{NamedTempFile, tempdir};
 use walkdir::WalkDir;
 
 use crate::cell::verify_manifest_files;
 use crate::{
-    EvidenceFile, ExperimentPlan, InputArtifactManifest, R8ArtifactManifest, ensure_file_hash,
-    parse_evidence_manifest, sha256_file, write_json,
+    EvidenceFile, EvidenceManifest, EvidenceState, ExpandedCell, ExperimentPlan,
+    InputArtifactManifest, R8ArtifactManifest, ensure_file_hash, parse_evidence_manifest,
+    sha256_file, write_json,
 };
+
+pub const VERIFIED_BUNDLE_MARKER: &str = ".bundle-verified-sha256";
 
 #[derive(Clone, Debug, Serialize)]
 pub struct PlannedCommand {
@@ -305,23 +309,124 @@ pub fn collect_manifests(request: CollectRequest<'_>) -> Result<usize> {
         .filter(|line| line.ends_with("/result.json"))
         .map(str::to_string)
         .collect();
+    let downloads = tempdir().context("failed to create manifest collection directory")?;
     let mut collected = 0;
     for cell in &expanded.cells {
-        let uri = format!("{}/result.json", cell.result_uri);
-        if !listed.contains(&uri) {
+        let legacy_uri = format!("{}/result.json", cell.result_uri);
+        let immutable_prefix = format!("{}/manifests/sha256/", cell.result_uri);
+        let candidate_uris: Vec<_> = listed
+            .iter()
+            .filter(|uri| **uri == legacy_uri || uri.starts_with(&immutable_prefix))
+            .cloned()
+            .collect();
+        if candidate_uris.is_empty() {
             continue;
         }
+        let mut attempts = Vec::with_capacity(candidate_uris.len());
+        let mut seen = BTreeSet::new();
+        for (index, uri) in candidate_uris.iter().enumerate() {
+            let temporary = downloads.path().join(format!("{}-{index}.json", cell.id));
+            run_checked(
+                request.gcloud,
+                &["storage", "cp", uri, temporary.to_string_lossy().as_ref()],
+            )?;
+            let manifest_sha256 = sha256_file(&temporary)?;
+            if let Some(remainder) = uri.strip_prefix(&immutable_prefix) {
+                let path_sha256 = remainder
+                    .split('/')
+                    .next()
+                    .context("immutable manifest URI has no SHA-256")?;
+                ensure!(
+                    path_sha256 == manifest_sha256,
+                    "immutable manifest content hash differs for {uri}"
+                );
+            }
+            if !seen.insert(manifest_sha256) {
+                continue;
+            }
+            let manifest = parse_evidence_manifest(&temporary)?;
+            ensure_manifest_identity(&manifest, &expanded.plan_sha256, cell)?;
+            attempts.push((uri.clone(), manifest));
+        }
+        let Some((_uri, manifest)) = select_manifest_attempt(attempts)? else {
+            continue;
+        };
         let destination_dir = request.output_dir.join(&cell.id);
         fs::create_dir_all(&destination_dir)?;
-        let temporary = destination_dir.join("result.json.tmp");
-        run_checked(
-            request.gcloud,
-            &["storage", "cp", &uri, temporary.to_string_lossy().as_ref()],
-        )?;
-        fs::rename(&temporary, destination_dir.join("result.json"))?;
+        let manifest_path = destination_dir.join("result.json");
+        write_json(&manifest_path, &manifest)?;
+        if manifest.state == EvidenceState::Complete {
+            let bundle = manifest
+                .bundle
+                .as_ref()
+                .context("complete manifest has no evidence bundle")?;
+            let bundle_uri = format!(
+                "{}/bundles/sha256/{}/evidence.tar.zst",
+                cell.result_uri, bundle.sha256
+            );
+            let bundle_path = downloads.path().join(format!("{}.tar.zst", cell.id));
+            run_checked(
+                request.gcloud,
+                &[
+                    "storage",
+                    "cp",
+                    &bundle_uri,
+                    bundle_path.to_string_lossy().as_ref(),
+                ],
+            )?;
+            verify_evidence_bundle_streaming(&manifest_path, &bundle_path)?;
+            fs::write(
+                destination_dir.join(VERIFIED_BUNDLE_MARKER),
+                format!("{}\n", bundle.sha256),
+            )?;
+        }
         collected += 1;
     }
     Ok(collected)
+}
+
+fn ensure_manifest_identity(
+    manifest: &EvidenceManifest,
+    plan_sha256: &str,
+    cell: &ExpandedCell,
+) -> Result<()> {
+    ensure!(
+        manifest.plan_sha256 == plan_sha256,
+        "manifest plan fingerprint differs"
+    );
+    ensure!(manifest.cell == *cell, "manifest expanded cell differs");
+    Ok(())
+}
+
+fn select_manifest_attempt(
+    mut attempts: Vec<(String, EvidenceManifest)>,
+) -> Result<Option<(String, EvidenceManifest)>> {
+    let complete = attempts
+        .iter()
+        .filter(|(_, manifest)| manifest.state == EvidenceState::Complete)
+        .count();
+    ensure!(
+        complete <= 1,
+        "cell has multiple complete immutable attempts; use a new plan to avoid biased selection"
+    );
+    if complete == 1 {
+        return Ok(attempts
+            .into_iter()
+            .find(|(_, manifest)| manifest.state == EvidenceState::Complete));
+    }
+    attempts.sort_by(|(left_uri, left), (right_uri, right)| {
+        attempt_timestamp(left)
+            .cmp(attempt_timestamp(right))
+            .then_with(|| left_uri.cmp(right_uri))
+    });
+    Ok(attempts.pop())
+}
+
+fn attempt_timestamp(manifest: &EvidenceManifest) -> &str {
+    manifest
+        .completed_utc
+        .as_deref()
+        .unwrap_or(&manifest.started_utc)
 }
 
 pub struct PrepareCellRequest<'a> {
@@ -492,6 +597,8 @@ pub struct UploadEvidenceRequest<'a> {
 #[derive(Clone, Debug, Serialize)]
 pub struct EvidenceUpload {
     pub result_uri: String,
+    pub manifest_uri: String,
+    pub manifest_sha256: String,
     pub bundle_uri: String,
     pub bundle_sha256: String,
     pub bundle_size_bytes: u64,
@@ -530,7 +637,11 @@ pub fn upload_evidence(request: UploadEvidenceRequest<'_>) -> Result<EvidenceUpl
         "{}/bundles/sha256/{}/evidence.tar.zst",
         cell.result_uri, bundle.sha256
     );
-    let manifest_uri = format!("{}/result.json", cell.result_uri);
+    let manifest_sha256 = sha256_file(&manifest_path)?;
+    let manifest_uri = format!(
+        "{}/manifests/sha256/{manifest_sha256}/result.json",
+        cell.result_uri
+    );
     let commands = vec![
         PlannedCommand {
             program: request.gcloud.display().to_string(),
@@ -568,6 +679,8 @@ pub fn upload_evidence(request: UploadEvidenceRequest<'_>) -> Result<EvidenceUpl
     }
     Ok(EvidenceUpload {
         result_uri: cell.result_uri.clone(),
+        manifest_uri,
+        manifest_sha256,
         bundle_uri,
         bundle_sha256: bundle.sha256,
         bundle_size_bytes: bundle.size_bytes,
@@ -666,6 +779,78 @@ pub fn verify_evidence_bundle(
     Ok(())
 }
 
+pub fn verify_evidence_bundle_streaming(manifest_path: &Path, bundle_path: &Path) -> Result<()> {
+    let manifest = parse_evidence_manifest(manifest_path)?;
+    let bundle = manifest
+        .bundle
+        .as_ref()
+        .context("manifest has no evidence bundle")?;
+    ensure_file_hash(bundle_path, &bundle.sha256)?;
+    ensure!(
+        bundle_path.metadata()?.len() == bundle.size_bytes,
+        "bundle size differs"
+    );
+    let expected: BTreeMap<_, _> = manifest
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), file))
+        .collect();
+    ensure!(
+        expected.len() == manifest.files.len(),
+        "manifest contains duplicate evidence paths"
+    );
+    let file = File::open(bundle_path)?;
+    let decoder = zstd::Decoder::new(file).context("failed to open zstd bundle")?;
+    let mut archive = tar::Archive::new(decoder);
+    let mut verified = BTreeSet::new();
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        ensure!(
+            entry.header().entry_type().is_file(),
+            "bundle entry is not a file"
+        );
+        let relative = entry.path()?.to_string_lossy().to_string();
+        ensure!(
+            is_safe_relative_path(&relative),
+            "unsafe bundle entry {relative}"
+        );
+        ensure!(
+            verified.insert(relative.clone()),
+            "duplicate bundle entry {relative}"
+        );
+        let expected_file = expected
+            .get(relative.as_str())
+            .with_context(|| format!("bundle contains unlisted file {relative}"))?;
+        let mut size = 0_u64;
+        let mut hasher = Sha256::new();
+        loop {
+            let read = entry.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            size = size
+                .checked_add(u64::try_from(read).context("bundle entry size overflow")?)
+                .context("bundle entry size overflow")?;
+            hasher.update(&buffer[..read]);
+        }
+        ensure!(
+            size == expected_file.size_bytes,
+            "file size differs for {relative}"
+        );
+        ensure!(
+            format!("{:x}", hasher.finalize()) == expected_file.sha256,
+            "file hash differs for {relative}"
+        );
+    }
+    let expected_paths: BTreeSet<_> = expected.keys().map(|path| (*path).to_string()).collect();
+    ensure!(
+        verified == expected_paths,
+        "bundle file set differs from manifest"
+    );
+    Ok(())
+}
+
 fn is_safe_relative_path(value: &str) -> bool {
     !value.is_empty()
         && !value.starts_with('/')
@@ -751,6 +936,49 @@ fn now_utc() -> String {
 mod tests {
     use super::*;
 
+    fn test_manifest(
+        state: EvidenceState,
+        started_utc: &str,
+        completed_utc: Option<&str>,
+    ) -> EvidenceManifest {
+        EvidenceManifest {
+            schema_version: crate::EVIDENCE_SCHEMA_VERSION,
+            experiment_id: "test".to_string(),
+            plan_sha256: "a".repeat(64),
+            cell_id: "cell".to_string(),
+            cell: crate::ExpandedCell {
+                id: "cell".to_string(),
+                kind: crate::CellKind::StandaloneTiming,
+                comparison_id: "comparison".to_string(),
+                runtime_id: "runtime".to_string(),
+                order: crate::PairOrder::AB,
+                pair_index: 1,
+                control_artifact: "control".to_string(),
+                candidate_artifact: "candidate".to_string(),
+                java_distribution: "test".to_string(),
+                java_version: "21".to_string(),
+                gc: crate::GarbageCollector::G1,
+                xmx: "1g".to_string(),
+                active_processors: 1,
+                r8_threads: 1,
+                gradle_cache_mode: None,
+                android_commit: None,
+                gradle_cleanup_tasks: Vec::new(),
+                gradle_tasks: Vec::new(),
+                gradle_arguments: Vec::new(),
+                runner_labels: vec!["test".to_string()],
+                result_uri: "gs://bucket/root/cells/cell".to_string(),
+            },
+            state,
+            started_utc: started_utc.to_string(),
+            completed_utc: completed_utc.map(str::to_string),
+            environment: BTreeMap::new(),
+            runs: Vec::new(),
+            files: Vec::new(),
+            bundle: None,
+        }
+    }
+
     #[test]
     fn rejects_mutable_tooling_ref() {
         assert!(validate_commit("main").is_err());
@@ -785,5 +1013,100 @@ mod tests {
             fs::read(output.join("r8-arguments.txt")).unwrap(),
             b"--release\n"
         );
+    }
+
+    #[test]
+    fn retry_selection_prefers_the_only_complete_immutable_attempt() {
+        let failed = test_manifest(
+            EvidenceState::Failed,
+            "2026-01-01T00:00:00Z",
+            Some("2026-01-01T00:01:00Z"),
+        );
+        let complete = test_manifest(
+            EvidenceState::Complete,
+            "2026-01-01T00:02:00Z",
+            Some("2026-01-01T00:03:00Z"),
+        );
+        let selected = select_manifest_attempt(vec![
+            ("legacy".to_string(), failed),
+            ("immutable".to_string(), complete),
+        ])
+        .unwrap()
+        .unwrap();
+        assert_eq!(selected.0, "immutable");
+        assert_eq!(selected.1.state, EvidenceState::Complete);
+    }
+
+    #[test]
+    fn retry_selection_rejects_multiple_complete_attempts() {
+        let first = test_manifest(
+            EvidenceState::Complete,
+            "2026-01-01T00:00:00Z",
+            Some("2026-01-01T00:01:00Z"),
+        );
+        let second = test_manifest(
+            EvidenceState::Complete,
+            "2026-01-01T00:02:00Z",
+            Some("2026-01-01T00:03:00Z"),
+        );
+        assert!(
+            select_manifest_attempt(vec![
+                ("first".to_string(), first),
+                ("second".to_string(), second),
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn verifies_evidence_bundle_without_extracting_large_outputs() {
+        let root = tempdir().unwrap();
+        let evidence_path = root.path().join("evidence.txt");
+        fs::write(&evidence_path, b"evidence").unwrap();
+        let mut manifest = test_manifest(
+            EvidenceState::Complete,
+            "2026-01-01T00:00:00Z",
+            Some("2026-01-01T00:01:00Z"),
+        );
+        let metrics = crate::RunMetrics {
+            wall_seconds: 1.0,
+            user_seconds: 1.0,
+            system_seconds: 0.0,
+            max_rss_bytes: 1024,
+            peak_footprint_bytes: 1024,
+            instructions: None,
+            cycles: None,
+        };
+        let outputs = BTreeMap::from([("out.zip".to_string(), "b".repeat(64))]);
+        manifest.runs = vec![
+            crate::BenchmarkRun {
+                ordinal: 1,
+                variant: crate::Variant::Control,
+                metrics: metrics.clone(),
+                outputs_sha256: outputs.clone(),
+            },
+            crate::BenchmarkRun {
+                ordinal: 2,
+                variant: crate::Variant::Candidate,
+                metrics,
+                outputs_sha256: outputs,
+            },
+        ];
+        manifest.files.push(EvidenceFile {
+            path: "evidence.txt".to_string(),
+            sha256: sha256_file(&evidence_path).unwrap(),
+            size_bytes: evidence_path.metadata().unwrap().len(),
+        });
+        let bundle_path = root.path().join("evidence.tar.zst");
+        create_evidence_bundle(root.path(), &manifest, &bundle_path).unwrap();
+        manifest.bundle = Some(EvidenceFile {
+            path: "evidence.tar.zst".to_string(),
+            sha256: sha256_file(&bundle_path).unwrap(),
+            size_bytes: bundle_path.metadata().unwrap().len(),
+        });
+        let manifest_path = root.path().join("result.json");
+        write_json(&manifest_path, &manifest).unwrap();
+        verify_evidence_bundle_streaming(&manifest_path, &bundle_path).unwrap();
+        assert!(!root.path().join("extracted").exists());
     }
 }

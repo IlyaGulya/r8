@@ -10,33 +10,27 @@ import java.util.Arrays;
 final class RegisterPositionTable {
 
   private static final int INITIAL_SIZE = 16;
-  private static final int EPOCH_SHIFT = Integer.SIZE;
-  private static final long POSITION_MASK = 0xffffffffL;
-  private static final long EPOCH_MASK = ~POSITION_MASK;
+  private static final int MAX_EPOCH = 0xff;
 
-  private long[] entries = new long[INITIAL_SIZE];
+  private int[] positions = new int[INITIAL_SIZE];
+  private byte[] epochs = new byte[INITIAL_SIZE];
   private int epoch;
-  private long epochBits;
   private int limit;
 
   RegisterPositionTable reset(int limit) {
     this.limit = limit;
-    if (epoch == Integer.MAX_VALUE) {
-      Arrays.fill(entries, 0);
+    if (epoch == MAX_EPOCH) {
+      Arrays.fill(epochs, (byte) 0);
       epoch = 1;
     } else {
       epoch++;
     }
-    epochBits = (long) epoch << EPOCH_SHIFT;
     return this;
   }
 
   int get(int index) {
-    if (index < entries.length) {
-      long entry = entries[index];
-      if ((entry & EPOCH_MASK) == epochBits) {
-        return (int) entry;
-      }
+    if (index < positions.length && epochs[index] == (byte) epoch) {
+      return positions[index];
     }
     assert index < limit;
     return Integer.MAX_VALUE;
@@ -48,18 +42,20 @@ final class RegisterPositionTable {
   }
 
   void set(int index, int position) {
-    if (index >= entries.length) {
+    if (index >= positions.length) {
       grow(index + 1);
     }
-    entries[index] = epochBits | (position & POSITION_MASK);
+    positions[index] = position;
+    epochs[index] = (byte) epoch;
   }
 
   private void grow(int minSize) {
-    int size = entries.length;
+    int size = positions.length;
     while (size < minSize) {
       size *= 2;
     }
     size = Math.min(size, limit);
-    entries = Arrays.copyOf(entries, size);
+    positions = Arrays.copyOf(positions, size);
+    epochs = Arrays.copyOf(epochs, size);
   }
 }

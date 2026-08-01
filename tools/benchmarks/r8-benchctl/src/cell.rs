@@ -5,8 +5,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
+use std::mem::MaybeUninit;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Output, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -668,22 +670,19 @@ fn run_cell_inner(
         } else {
             "no-jfr"
         };
-        let output = invoke_runner(request, cell, jar, &run_dir, mode)?;
-        fs::write(run_dir.join("runner-stdout.log"), &output.stdout)?;
-        fs::write(run_dir.join("runner-stderr.log"), &output.stderr)?;
+        let measured = invoke_runner(request, cell, jar, &run_dir, mode)?;
         ensure!(
-            output.status.success(),
+            measured.status.success(),
             "runner failed for run {ordinal} ({}) with status {}",
             variant_name(*variant),
-            output.status
+            measured.status
         );
         let outputs = verify_exact_outputs(request.expected_outputs, &run_dir)?;
-        let metrics = parse_time_report(&run_dir.join("time.txt"))?;
         write_host_snapshot(&run_dir.join("host-after.txt"))?;
         manifest.runs.push(BenchmarkRun {
             ordinal,
             variant: *variant,
-            metrics,
+            metrics: measured.metrics,
             outputs_sha256: outputs,
         });
         write_json_atomic(&request.result_dir.join("result.json"), manifest)?;
@@ -696,13 +695,18 @@ fn run_cell_inner(
     Ok(())
 }
 
+struct MeasuredRunnerRun {
+    status: ExitStatus,
+    metrics: RunMetrics,
+}
+
 fn invoke_runner(
     request: &RunCellRequest<'_>,
     cell: &ExpandedCell,
     jar: &Path,
     run_dir: &Path,
     mode: &str,
-) -> Result<Output> {
+) -> Result<MeasuredRunnerRun> {
     let runtime = request
         .plan
         .runtimes
@@ -736,8 +740,107 @@ fn invoke_runner(
         );
     }
     command
-        .output()
-        .with_context(|| format!("failed to start runner {}", request.runner.display()))
+        .stdout(Stdio::from(File::create(
+            run_dir.join("runner-stdout.log"),
+        )?))
+        .stderr(Stdio::from(File::create(
+            run_dir.join("runner-stderr.log"),
+        )?));
+    let child = command
+        .spawn()
+        .with_context(|| format!("failed to start runner {}", request.runner.display()))?;
+    let measured = wait_with_rusage(child)?;
+    fs::write(
+        run_dir.join("time.txt"),
+        format_time_report(&measured.metrics),
+    )?;
+    Ok(measured)
+}
+
+fn wait_with_rusage(child: std::process::Child) -> Result<MeasuredRunnerRun> {
+    let pid = i32::try_from(child.id()).context("runner PID does not fit pid_t")?;
+    let started = Instant::now();
+    let mut peak_footprint = read_cgroup_value("/sys/fs/cgroup/memory.current");
+    let mut raw_status = 0;
+    let mut usage = MaybeUninit::<libc::rusage>::zeroed();
+    loop {
+        // SAFETY: pid belongs to the live Child retained by this function, raw_status and usage
+        // point to valid writable storage, and WNOHANG lets us sample cgroup memory while waiting.
+        let waited =
+            unsafe { libc::wait4(pid, &mut raw_status, libc::WNOHANG, usage.as_mut_ptr()) };
+        if waited == pid {
+            break;
+        }
+        if waited < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            return Err(error).context("failed to wait for benchmark runner");
+        }
+        peak_footprint = max_optional(
+            peak_footprint,
+            read_cgroup_value("/sys/fs/cgroup/memory.current"),
+        );
+        thread::sleep(Duration::from_millis(250));
+    }
+    peak_footprint = max_optional(
+        peak_footprint,
+        read_cgroup_value("/sys/fs/cgroup/memory.current"),
+    );
+    // The process was reaped by wait4. Child has no piped handles and dropping its Rust handle is
+    // safe; unlike Child::wait, Drop does not attempt a second wait on Unix.
+    drop(child);
+    // SAFETY: wait4 returned this PID and therefore initialized the rusage structure.
+    let usage = unsafe { usage.assume_init() };
+    let max_rss_bytes = rusage_max_rss_bytes(&usage)?;
+    let metrics = RunMetrics {
+        wall_seconds: started.elapsed().as_secs_f64(),
+        user_seconds: timeval_seconds(usage.ru_utime)?,
+        system_seconds: timeval_seconds(usage.ru_stime)?,
+        max_rss_bytes,
+        peak_footprint_bytes: peak_footprint.unwrap_or(max_rss_bytes),
+        instructions: None,
+        cycles: None,
+    };
+    Ok(MeasuredRunnerRun {
+        status: ExitStatus::from_raw(raw_status),
+        metrics,
+    })
+}
+
+fn timeval_seconds(value: libc::timeval) -> Result<f64> {
+    ensure!(
+        value.tv_sec >= 0 && value.tv_usec >= 0,
+        "negative rusage timeval"
+    );
+    Ok(value.tv_sec as f64 + value.tv_usec as f64 / 1_000_000.0)
+}
+
+fn rusage_max_rss_bytes(usage: &libc::rusage) -> Result<u64> {
+    let raw = u64::try_from(usage.ru_maxrss).context("negative maximum RSS")?;
+    if cfg!(target_os = "macos") {
+        Ok(raw)
+    } else {
+        Ok(raw.saturating_mul(1024))
+    }
+}
+
+fn format_time_report(metrics: &RunMetrics) -> String {
+    format!(
+        concat!(
+            "User time (seconds): {:.6}\n",
+            "System time (seconds): {:.6}\n",
+            "Elapsed (wall clock) time (seconds): {:.6}\n",
+            "Maximum resident set size (bytes): {}\n",
+            "Peak cgroup footprint (bytes): {}\n"
+        ),
+        metrics.user_seconds,
+        metrics.system_seconds,
+        metrics.wall_seconds,
+        metrics.max_rss_bytes,
+        metrics.peak_footprint_bytes,
+    )
 }
 
 fn variants_for_order(order: PairOrder) -> &'static [Variant] {
@@ -831,13 +934,22 @@ fn parse_time_report_text(text: &str) -> Result<RunMetrics> {
         } else if let Some(value) = value_after_colon(trimmed, "System time (seconds):") {
             system_seconds = Some(parse_f64(value, "system time")?);
         } else if let Some(value) =
+            value_after_colon(trimmed, "Elapsed (wall clock) time (seconds):")
+        {
+            wall_seconds = Some(parse_f64(value, "wall time")?);
+        } else if let Some(value) =
             value_after_colon(trimmed, "Elapsed (wall clock) time (h:mm:ss or m:ss):")
         {
             wall_seconds = Some(parse_elapsed(value)?);
+        } else if let Some(value) = value_after_colon(trimmed, "Maximum resident set size (bytes):")
+        {
+            max_rss_bytes = Some(parse_u64(value, "maximum RSS")?);
         } else if let Some(value) =
             value_after_colon(trimmed, "Maximum resident set size (kbytes):")
         {
             max_rss_bytes = Some(parse_u64(value, "maximum RSS")?.saturating_mul(1024));
+        } else if let Some(value) = value_after_colon(trimmed, "Peak cgroup footprint (bytes):") {
+            peak_footprint_bytes = Some(parse_u64(value, "peak footprint")?);
         } else if let Some(value) = trimmed.strip_suffix(" maximum resident set size") {
             max_rss_bytes = Some(parse_u64(value.trim(), "maximum RSS")?);
         } else if let Some(value) = trimmed.strip_suffix(" peak memory footprint") {
@@ -1229,6 +1341,23 @@ mod tests {
     }
 
     #[test]
+    fn round_trips_controller_time_report() {
+        let expected = RunMetrics {
+            wall_seconds: 12.25,
+            user_seconds: 100.5,
+            system_seconds: 2.75,
+            max_rss_bytes: 4_000_000_000,
+            peak_footprint_bytes: 4_500_000_000,
+            instructions: None,
+            cycles: None,
+        };
+        assert_eq!(
+            parse_time_report_text(&format_time_report(&expected)).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
     fn rejects_incomplete_time_report() {
         assert!(parse_time_report_text("1.0 real\n").is_err());
     }
@@ -1394,7 +1523,7 @@ mod tests {
         let report = crate::report::aggregate_local(&plan, root.path(), true).unwrap();
         assert_eq!(report.complete_cells, 1);
         assert_eq!(report.groups.len(), 1);
-        assert_eq!(report.groups[0].wall_percent.mean, 0.0);
+        assert!(report.groups[0].wall_percent.mean.is_finite());
 
         let bundle = root.path().join("evidence.tar.zst");
         crate::external::create_evidence_bundle(&result_dir, &manifest, &bundle).unwrap();

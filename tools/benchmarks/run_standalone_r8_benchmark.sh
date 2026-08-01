@@ -160,24 +160,16 @@ if [[ "$profile_mode" == "diagnostic" ]]; then
   system_monitor_pid=$!
 fi
 
-time_args=()
-if [[ "$(uname -s)" == "Darwin" ]]; then
-  time_args+=("-l")
-else
-  time_args+=("-v")
-fi
-
-# Redirect the child output before redirecting the enclosing time process. This keeps raw R8 logs
-# and platform-specific resource metrics in separate files for the Rust evidence parser.
-{
-  /usr/bin/time "${time_args[@]}" "$java_bin" \
-    "-Xmx$java_heap_size" \
-    "-XX:ActiveProcessorCount=$active_processor_count" \
-    ${jvm_tuning_args[@]+"${jvm_tuning_args[@]}"} \
-    ${jfr_args[@]+"${jfr_args[@]}"} \
-    ${extra_jvm_args[@]+"${extra_jvm_args[@]}"} \
-    -cp "$r8_jar" \
-    com.android.tools.r8.R8 \
-    --thread-count "$r8_thread_count" "${r8_arguments[@]}" \
-    >"$output_dir/run.log" 2>&1
-} 2>"$output_dir/time.txt"
+# The Rust controller measures this process tree with wait4 and samples cgroup memory. Keeping
+# resource accounting outside this launcher makes the benchmark work on minimal runner images
+# that do not ship GNU time and gives identical measurement semantics on Linux and macOS.
+"$java_bin" \
+  "-Xmx$java_heap_size" \
+  "-XX:ActiveProcessorCount=$active_processor_count" \
+  ${jvm_tuning_args[@]+"${jvm_tuning_args[@]}"} \
+  ${jfr_args[@]+"${jfr_args[@]}"} \
+  ${extra_jvm_args[@]+"${extra_jvm_args[@]}"} \
+  -cp "$r8_jar" \
+  com.android.tools.r8.R8 \
+  --thread-count "$r8_thread_count" "${r8_arguments[@]}" \
+  >"$output_dir/run.log" 2>&1

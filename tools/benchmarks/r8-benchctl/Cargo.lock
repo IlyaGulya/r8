@@ -462,6 +462,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "libc",
  "schemars",
  "serde",
  "serde_json",

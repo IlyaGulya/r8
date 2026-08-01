@@ -231,6 +231,8 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
   // Scratch state for one free-register decision. Entries from the previous decision are hidden
   // by an epoch rather than cleared or reallocated.
   private final ReusableRegisterPositions reusableFreePositions = new ReusableRegisterPositions();
+  // Lazily allocated scratch state for invoke-range blocking. Most allocators never need it.
+  private RegisterPositionTable reusableBlockedPositions;
   // The max register number used.
   private int maxRegisterNumber = -1;
 
@@ -2726,7 +2728,6 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
   private void allocateBlockedRegister(LiveIntervals unhandledInterval, int registerConstraint) {
     // Initialize all candidate registers to Integer.MAX_VALUE.
     RegisterPositions usePositions = new RegisterPositionsImpl(registerConstraint + 1);
-    RegisterPositionTable blockedPositions = new RegisterPositionTable(registerConstraint + 1);
 
     // Compute next use location for all currently active registers.
     for (LiveIntervals intervals : active) {
@@ -2779,8 +2780,8 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
 
     // Treat active and inactive linked argument intervals as pinned. They cannot be given another
     // register at their uses.
-    blockInvokeRangeIntervals(
-        unhandledInterval, registerConstraint, usePositions, blockedPositions);
+    RegisterPositionTable blockedPositions =
+        blockInvokeRangeIntervals(unhandledInterval, registerConstraint, usePositions);
 
     // Get the register (pair) that has the highest use position.
     boolean needsRegisterPair = unhandledInterval.getType().isWide();
@@ -2835,7 +2836,10 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
     }
 
     int largestUsePosition = getLargestPosition(usePositions, candidate, needsRegisterPair);
-    int blockedPosition = blockedPositions.get(candidate, needsRegisterPair);
+    int blockedPosition =
+        blockedPositions != null
+            ? blockedPositions.get(candidate, needsRegisterPair)
+            : Integer.MAX_VALUE;
 
     if (largestUsePosition < unhandledInterval.getFirstUse()) {
       // All active and inactive intervals are used before current. Therefore, it is best to spill
@@ -3061,37 +3065,45 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
     }
   }
 
-  private void blockInvokeRangeIntervals(
+  private RegisterPositionTable blockInvokeRangeIntervals(
       LiveIntervals unhandledInterval,
       int registerConstraint,
-      RegisterPositions usePositions,
-      RegisterPositionTable blockedPositions) {
+      RegisterPositions usePositions) {
     // TODO(b/302281605): The only way there can be active invoke-range intervals is if we have a
     //  live intervals that have been split right before the invoke range instruction. If we had a
     //  mapping from instruction number to the invoke range instruction, we could find the invoke
     //  range live intervals directly without scanning all active intervals. Moreover, we could
     //  avoid checking if the intervals overlap, since they clearly do.
+    RegisterPositionTable blockedPositions = null;
     for (LiveIntervals intervals : Iterables.concat(active, inactive)) {
       if (!intervals.isInvokeRangeIntervals()) {
         continue;
       }
       int registerStart = intervals.getRegister();
       if (registerStart <= registerConstraint && intervals.overlaps(unhandledInterval)) {
+        if (blockedPositions == null) {
+          if (reusableBlockedPositions == null) {
+            reusableBlockedPositions = new RegisterPositionTable();
+          }
+          blockedPositions = reusableBlockedPositions.reset(registerConstraint + 1);
+        }
+        RegisterPositionTable currentBlockedPositions = blockedPositions;
         intervals.forEachRegister(
             register -> {
               if (register <= registerConstraint) {
                 int firstUse = intervals.firstUseAfter(unhandledInterval.getStart());
-                if (firstUse < blockedPositions.get(register)) {
-                  blockedPositions.set(register, firstUse);
+                if (firstUse < currentBlockedPositions.get(register)) {
+                  currentBlockedPositions.set(register, firstUse);
                   // If we start blocking registers other than linked arguments, we might need to
                   // explicitly update the use positions as well as blocked positions.
                   assert usePositions.isBlocked(register)
-                      || usePositions.get(register) <= blockedPositions.get(register);
+                      || usePositions.get(register) <= currentBlockedPositions.get(register);
                 }
               }
             });
       }
     }
+    return blockedPositions;
   }
 
   // Returns the number of added parallel move temporary registers.

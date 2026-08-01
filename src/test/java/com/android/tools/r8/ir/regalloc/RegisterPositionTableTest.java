@@ -12,7 +12,7 @@ public class RegisterPositionTableTest {
 
   @Test
   public void testPositionOnlyTable() {
-    RegisterPositionTable positions = new RegisterPositionTable(256);
+    RegisterPositionTable positions = new RegisterPositionTable().reset(256);
     assertEquals(Integer.MAX_VALUE, positions.get(0));
     assertEquals(Integer.MAX_VALUE, positions.get(255));
 
@@ -27,5 +27,12 @@ public class RegisterPositionTableTest {
     assertEquals(42, positions.get(15, false));
     assertEquals(42, positions.get(15, true));
     assertEquals(84, positions.get(30, true));
+
+    positions.reset(32);
+    assertEquals(Integer.MAX_VALUE, positions.get(15));
+    assertEquals(Integer.MAX_VALUE, positions.get(31));
+    positions.set(15, 168);
+    assertEquals(168, positions.get(15));
+    assertEquals(Integer.MAX_VALUE, positions.get(31));
   }
 }

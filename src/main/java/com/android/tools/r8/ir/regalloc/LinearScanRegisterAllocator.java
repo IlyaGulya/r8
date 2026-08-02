@@ -3087,20 +3087,16 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
           }
           blockedPositions = reusableBlockedPositions.reset(registerConstraint + 1);
         }
-        RegisterPositionTable currentBlockedPositions = blockedPositions;
-        intervals.forEachRegister(
-            register -> {
-              if (register <= registerConstraint) {
-                int firstUse = intervals.firstUseAfter(unhandledInterval.getStart());
-                if (firstUse < currentBlockedPositions.get(register)) {
-                  currentBlockedPositions.set(register, firstUse);
-                  // If we start blocking registers other than linked arguments, we might need to
-                  // explicitly update the use positions as well as blocked positions.
-                  assert usePositions.isBlocked(register)
-                      || usePositions.get(register) <= currentBlockedPositions.get(register);
-                }
-              }
-            });
+        int firstUse = intervals.firstUseAfter(unhandledInterval.getStart());
+        int registerEnd = Math.min(intervals.getRegisterEnd(), registerConstraint);
+        for (int register = registerStart; register <= registerEnd; register++) {
+          if (firstUse < blockedPositions.get(register)) {
+            blockedPositions.set(register, firstUse);
+            // If we start blocking registers other than linked arguments, we might need to
+            // explicitly update the use positions as well as blocked positions.
+            assert usePositions.isBlocked(register) || usePositions.get(register) <= firstUse;
+          }
+        }
       }
     }
     return blockedPositions;

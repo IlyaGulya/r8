@@ -70,14 +70,13 @@ import it.unimi.dsi.fastutil.ints.IntArraySet;
 import it.unimi.dsi.fastutil.ints.IntIterator;
 import it.unimi.dsi.fastutil.ints.IntList;
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
-import it.unimi.dsi.fastutil.ints.IntRBTreeSet;
 import it.unimi.dsi.fastutil.ints.IntSet;
-import it.unimi.dsi.fastutil.ints.IntSortedSet;
 import it.unimi.dsi.fastutil.objects.Reference2IntArrayMap;
 import it.unimi.dsi.fastutil.objects.Reference2IntMap;
 import it.unimi.dsi.fastutil.objects.Reference2IntOpenHashMap;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.BitSet;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
@@ -227,7 +226,7 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
   // The current register allocation mode.
   private ArgumentReuseMode mode;
   // The set of registers that are free for allocation.
-  private IntSortedSet freeRegisters = new IntRBTreeSet();
+  private BitSet freeRegisters = new BitSet();
   // Scratch state for one free-register decision. Entries from the previous decision are hidden
   // by an epoch rather than cleared or reallocated.
   private final ReusableRegisterPositions reusableFreePositions = new ReusableRegisterPositions();
@@ -1367,16 +1366,14 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
   }
 
   private boolean invariantsHold(ArgumentReuseMode mode) {
-    IntSortedSet computedFreeRegisters = new IntRBTreeSet();
-    for (int register = 0; register <= maxRegisterNumber; ++register) {
-      computedFreeRegisters.add(register);
-    }
+    BitSet computedFreeRegisters = new BitSet(maxRegisterNumber + 1);
+    computedFreeRegisters.set(0, maxRegisterNumber + 1);
     for (LiveIntervals activeIntervals : active) {
       assert registersForIntervalsAreTaken(activeIntervals);
       activeIntervals.forEachRegister(
           register -> {
-            assert computedFreeRegisters.contains(register);
-            computedFreeRegisters.remove(register);
+            assert computedFreeRegisters.get(register);
+            computedFreeRegisters.clear(register);
           });
     }
     // All active argument intervals that are pinned must be present in its original, incoming
@@ -1388,8 +1385,8 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
         if (parent.getRegister() != activeIntervals.getRegister()) {
           parent.forEachRegister(
               register -> {
-                assert computedFreeRegisters.contains(register);
-                computedFreeRegisters.remove(register);
+                assert computedFreeRegisters.get(register);
+                computedFreeRegisters.clear(register);
               });
         }
       }
@@ -1397,8 +1394,8 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
     if (hasDedicatedMoveExceptionRegister()) {
       // Relax the check, since it is not currently guaranteed that the move exception register is
       // occupied if-and-only-if there is an active live interval with the register.
-      freeRegisters.remove(getMoveExceptionRegister());
-      computedFreeRegisters.remove(getMoveExceptionRegister());
+      freeRegisters.clear(getMoveExceptionRegister());
+      computedFreeRegisters.clear(getMoveExceptionRegister());
     }
     assert expiredHere.isEmpty();
     assert freeRegisters.equals(computedFreeRegisters);
@@ -1416,7 +1413,7 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
         boolean isMoveExceptionRegister =
             hasDedicatedMoveExceptionRegister() && register == getMoveExceptionRegister();
         if (!isMoveExceptionRegister) {
-          assert freeRegisters.contains(register);
+          assert freeRegisters.get(register);
         }
       }
     }
@@ -1527,7 +1524,7 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
 
     // Save the current register allocation state so we can restore it at the end.
     timing.begin("Copy free registers");
-    IntSortedSet savedFreeRegisters = new IntRBTreeSet(freeRegisters);
+    BitSet savedFreeRegisters = (BitSet) freeRegisters.clone();
     int savedMaxRegisterNumber = maxRegisterNumber;
     timing.end();
 
@@ -1563,7 +1560,7 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
     freeRegisters = savedFreeRegisters;
     // In case maxRegisterNumber has changed, update freeRegisters.
     for (int i = savedMaxRegisterNumber + 1; i <= maxRegisterNumber; i++) {
-      freeRegisters.add(i);
+      freeRegisters.set(i);
     }
     // Move all the argument intervals to the inactive set.
     inactive.addAll(intervalsList);
@@ -1604,7 +1601,7 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
         }
         ensureCapacity(firstLocalRegister + numberOfOutRegisters - 1);
         for (int i = 0; i < numberOfOutRegisters; i++) {
-          freeRegisters.remove(firstLocalRegister + i);
+          freeRegisters.clear(firstLocalRegister + i);
         }
       }
 
@@ -1652,7 +1649,7 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
               isDedicatedMoveExceptionRegisterInFirstLocalRegister()
                   && (!start.isLiveAtMoveExceptionEntry() || !overlapsMoveExceptionInterval(start));
           if (!canUseMoveExceptionRegisterForLinkedIntervals) {
-            freeRegisters.remove(getMoveExceptionRegister());
+            freeRegisters.clear(getMoveExceptionRegister());
           }
         }
         timing.end();
@@ -1718,11 +1715,11 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
       return intervals.getSplitParent().getRegister();
     }
 
-    IntSortedSet previousFreeRegisters = new IntRBTreeSet(freeRegisters);
+    BitSet previousFreeRegisters = (BitSet) freeRegisters.clone();
     int previousMaxRegisterNumber = maxRegisterNumber;
-    freeRegisters.removeAll(expiredHere);
+    expiredHere.forEach(freeRegisters::clear);
     if (excludedRegisters != null) {
-      freeRegisters.removeAll(excludedRegisters);
+      excludedRegisters.forEach(freeRegisters::clear);
     }
 
     // Check if we can use a register that was previously used as a register for intervals.
@@ -1755,7 +1752,7 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
     // If getFreeConsecutiveRegisters had to increment |maxRegisterNumber|, we need to update
     // freeRegisters.
     for (int i = previousMaxRegisterNumber + 1; i <= maxRegisterNumber; ++i) {
-      freeRegisters.add(i);
+      freeRegisters.set(i);
     }
     assert registersAreFree(register, intervals.getType().isWide());
     return register;
@@ -1783,14 +1780,14 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
       do {
         if (argumentLiveIntervals.anySplitOverlaps(intervals)) {
           // Remove so that next invocation of getFreeConsecutiveRegisters does not consider this.
-          freeRegisters.remove(register);
+          freeRegisters.clear(register);
           // We have just established that there is an overlap between the live range of the
           // current argument and the live range we need to find a register for. Therefore, if
           // the argument is wide, and the current register corresponds to the low register of the
           // argument, we know that the subsequent register will not work either.
           if (register == argumentLiveIntervals.getRegister()
               && argumentLiveIntervals.getType().isWide()) {
-            freeRegisters.remove(register + 1);
+            freeRegisters.clear(register + 1);
           }
           return false;
         }
@@ -1811,10 +1808,10 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
     }
     if (overlapsInactiveIntervals != null) {
       // Remove so that next invocation of getFreeConsecutiveRegisters does not consider this.
-      freeRegisters.remove(register);
+      freeRegisters.clear(register);
       if (register == overlapsInactiveIntervals.getRegister()
           && overlapsInactiveIntervals.getType().isWide()) {
-        freeRegisters.remove(register + 1);
+        freeRegisters.clear(register + 1);
       }
       return false;
     }
@@ -1828,7 +1825,7 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
             && overlapsMoveExceptionInterval(intervals);
     if (overlapsMoveExceptionInterval) {
       // Remove so that next invocation of getFreeConsecutiveRegisters does not consider this.
-      freeRegisters.remove(register);
+      freeRegisters.clear(register);
       return false;
     }
 
@@ -3818,9 +3815,7 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
 
   private void increaseCapacity(int newMaxRegisterNumber, boolean takeRegisters) {
     if (!takeRegisters) {
-      for (int register = maxRegisterNumber + 1; register <= newMaxRegisterNumber; ++register) {
-        freeRegisters.add(register);
-      }
+      freeRegisters.set(maxRegisterNumber + 1, newMaxRegisterNumber + 1);
     }
     maxRegisterNumber = newMaxRegisterNumber;
   }
@@ -3831,46 +3826,34 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
 
   private int getFreeConsecutiveRegisters(int numberOfRegisters, boolean prioritizeSmallRegisters) {
     int oldMaxRegisterNumber = maxRegisterNumber;
-    IntSortedSet freeRegistersWithDesiredOrdering = freeRegisters;
+    int first;
     if (prioritizeSmallRegisters) {
-      freeRegistersWithDesiredOrdering =
-          new IntRBTreeSet(
-              (Integer x, Integer y) -> {
-                boolean xIsArgument = isArgumentRegister(x);
-                boolean yIsArgument = isArgumentRegister(y);
-                // If x is an argument and y is not, then prioritize y.
-                if (xIsArgument && !yIsArgument) {
-                  return 1;
-                }
-                // If x is not an argument and y is, then prioritize x.
-                if (!xIsArgument && yIsArgument) {
-                  return -1;
-                }
-                // Otherwise use their normal ordering.
-                return x - y;
-              });
-      freeRegistersWithDesiredOrdering.addAll(freeRegisters);
-    }
-
-    IntIterator freeRegistersIterator = freeRegistersWithDesiredOrdering.iterator();
-    int first = getNextFreeRegister(freeRegistersIterator);
-    int current = first;
-    while (current - first + 1 != numberOfRegisters) {
-      for (int i = 0; i < numberOfRegisters - 1; i++) {
-        int next = getNextFreeRegister(freeRegistersIterator);
-        // We cannot allow that some are argument registers and some or not, because they will no
-        // longer be consecutive if we later decide to increment maxRegisterNumber.
-        if (next != current + 1 || next == numberOfArgumentRegisters) {
-          first = next;
-          current = first;
-          break;
-        }
-        current++;
+      first =
+          findFreeConsecutiveRegisters(
+              numberOfArgumentRegisters, maxRegisterNumber, numberOfRegisters);
+      if (first == NO_REGISTER) {
+        first =
+            findFreeConsecutiveRegisters(0, numberOfArgumentRegisters - 1, numberOfRegisters);
+      }
+    } else {
+      first = findFreeConsecutiveRegisters(0, numberOfArgumentRegisters - 1, numberOfRegisters);
+      if (first == NO_REGISTER) {
+        first =
+            findFreeConsecutiveRegisters(
+                numberOfArgumentRegisters, maxRegisterNumber, numberOfRegisters);
       }
     }
+    if (first == NO_REGISTER) {
+      first = maxRegisterNumber + 1;
+      if (first < numberOfArgumentRegisters
+          && first + numberOfRegisters > numberOfArgumentRegisters) {
+        first = numberOfArgumentRegisters;
+      }
+      maxRegisterNumber = first + numberOfRegisters - 1;
+    }
     for (int register = oldMaxRegisterNumber + 1; register <= maxRegisterNumber; ++register) {
-      boolean wasAdded = freeRegisters.add(register);
-      assert wasAdded;
+      assert !freeRegisters.get(register);
+      freeRegisters.set(register);
     }
     // Either all the consecutive registers are from the argument registers, or all are from the
     // non-argument registers.
@@ -3879,12 +3862,27 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
     return first;
   }
 
+  private int findFreeConsecutiveRegisters(int from, int to, int numberOfRegisters) {
+    if (from > to || numberOfRegisters > to - from + 1) {
+      return NO_REGISTER;
+    }
+    int first = freeRegisters.nextSetBit(from);
+    while (first >= 0 && first + numberOfRegisters - 1 <= to) {
+      int firstTaken = freeRegisters.nextClearBit(first);
+      if (firstTaken - first >= numberOfRegisters) {
+        return first;
+      }
+      first = freeRegisters.nextSetBit(firstTaken + 1);
+    }
+    return NO_REGISTER;
+  }
+
   private boolean registersAreFreeAndConsecutive(int register, boolean registerIsWide) {
-    if (!freeRegisters.contains(register)) {
+    if (!freeRegisters.get(register)) {
       return false;
     }
     if (registerIsWide) {
-      if (!freeRegisters.contains(register + 1)) {
+      if (!freeRegisters.get(register + 1)) {
         return false;
       }
       if (register == numberOfArgumentRegisters - 1) {
@@ -3895,21 +3893,14 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
     return true;
   }
 
-  private int getNextFreeRegister(IntIterator freeRegistersIterator) {
-    if (freeRegistersIterator.hasNext()) {
-      return freeRegistersIterator.nextInt();
-    }
-    return ++maxRegisterNumber;
-  }
-
   private void excludeRegistersForInterval(LiveIntervals intervals) {
     assert intervals.hasRegister();
-    intervals.forEachRegister(freeRegisters::remove);
+    intervals.forEachRegister(freeRegisters::clear);
     if (isPinnedArgumentRegister(intervals) && !intervals.isSplitParent()) {
       LiveIntervals parent = intervals.getSplitParent();
       assert parent.hasRegister();
       if (parent.getRegister() != intervals.getRegister()) {
-        parent.forEachRegister(freeRegisters::remove);
+        parent.forEachRegister(freeRegisters::clear);
       }
     }
   }
@@ -3918,9 +3909,9 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
     assert registersForIntervalsAreTaken(intervals);
     int register = intervals.getRegister();
     assert register + intervals.requiredRegisters() - 1 <= maxRegisterNumber;
-    freeRegisters.add(register);
+    freeRegisters.set(register);
     if (intervals.getType().isWide()) {
-      freeRegisters.add(register + 1);
+      freeRegisters.set(register + 1);
     }
 
     if (isPinnedArgumentRegister(intervals) && !intervals.isSplitParent()) {
@@ -3933,9 +3924,9 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
 
   private void takeFreeRegisters(int register, boolean isWide) {
     assert registersAreFree(register, isWide);
-    freeRegisters.remove(register);
+    freeRegisters.clear(register);
     if (isWide) {
-      freeRegisters.remove(register + 1);
+      freeRegisters.clear(register + 1);
     }
   }
 
@@ -3951,13 +3942,13 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
   }
 
   private boolean registerIsFree(int register) {
-    return freeRegisters.contains(register) || isDedicatedMoveExceptionRegister(register);
+    return freeRegisters.get(register) || isDedicatedMoveExceptionRegister(register);
   }
 
   private boolean registerRangeIsFree(int register, int requiredRegisters) {
     for (int i = 0; i < requiredRegisters; i++) {
       assert !isDedicatedMoveExceptionRegister(register + i);
-      if (!freeRegisters.contains(register + i)) {
+      if (!freeRegisters.get(register + i)) {
         return false;
       }
     }
@@ -3971,7 +3962,7 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
   }
 
   private boolean registersAreTaken(int register, boolean isWide) {
-    return !freeRegisters.contains(register) && (!isWide || !freeRegisters.contains(register + 1));
+    return !freeRegisters.get(register) && (!isWide || !freeRegisters.get(register + 1));
   }
 
   private boolean registersForIntervalsAreTaken(LiveIntervals intervals) {
@@ -3980,7 +3971,7 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
   }
 
   private boolean atLeastOneOfRegistersAreTaken(int register, boolean isWide) {
-    return !freeRegisters.contains(register) || (isWide && !freeRegisters.contains(register + 1));
+    return !freeRegisters.get(register) || (isWide && !freeRegisters.get(register + 1));
   }
 
   @Override

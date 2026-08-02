@@ -237,13 +237,9 @@ public class LinearScanRegisterAllocator implements RegisterAllocator {
   // List of all top-level live intervals for all SSA values.
   private List<LiveIntervals> liveIntervals = new ArrayList<>();
   // List of active intervals.
-  // TODO(b/270398965): Replace LinkedList.
-  @SuppressWarnings("JdkObsolete")
-  private List<LiveIntervals> active = new LinkedList<>();
+  private List<LiveIntervals> active = new ArrayList<>();
   // List of intervals where the current instruction falls into one of their live range holes.
-  // TODO(b/270398965): Replace LinkedList.
-  @SuppressWarnings("JdkObsolete")
-  protected List<LiveIntervals> inactive = new LinkedList<>();
+  protected List<LiveIntervals> inactive = new ArrayList<>();
   // List of intervals that no register has been allocated to sorted by first live range.
   protected PriorityQueue<LiveIntervals> unhandled = new PriorityQueue<>();
 

@@ -106,6 +106,8 @@ pub struct DiagnosticsSpec {
     pub enabled: bool,
     #[serde(default = "default_diagnostic_max_parallel")]
     pub max_parallel: u16,
+    #[serde(default, skip_serializing_if = "DiagnosticLayout::is_abba")]
+    pub layout: DiagnosticLayout,
     #[serde(default)]
     pub jit_targets: Vec<String>,
 }
@@ -114,11 +116,33 @@ fn default_diagnostic_max_parallel() -> u16 {
     1
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticLayout {
+    #[default]
+    Abba,
+    ShardedPairs,
+}
+
+impl DiagnosticLayout {
+    fn is_abba(&self) -> bool {
+        *self == Self::Abba
+    }
+
+    fn cell_count(self) -> usize {
+        match self {
+            Self::Abba => 1,
+            Self::ShardedPairs => 2,
+        }
+    }
+}
+
 impl Default for DiagnosticsSpec {
     fn default() -> Self {
         Self {
             enabled: false,
             max_parallel: default_diagnostic_max_parallel(),
+            layout: DiagnosticLayout::default(),
             jit_targets: Vec::new(),
         }
     }
@@ -482,19 +506,73 @@ impl ExperimentPlan {
             cell_count <= MAX_MATRIX_CELLS,
             "plan expands to {cell_count} cells; maximum is {MAX_MATRIX_CELLS}"
         );
+        self.validate_generated_cell_ids()?;
         Ok(())
     }
 
     pub fn expected_cell_count(&self) -> usize {
         let dimensions = self.comparisons.len() * self.runtimes.len();
         let timing = dimensions * usize::from(self.timing.pairs);
-        let diagnostics = usize::from(self.diagnostics.enabled) * dimensions;
+        let diagnostics = usize::from(self.diagnostics.enabled)
+            * dimensions
+            * self.diagnostics.layout.cell_count();
         let gradle = if self.gradle.enabled {
             dimensions * usize::from(self.gradle.pairs) * self.gradle.github_cache_modes.len()
         } else {
             0
         };
         timing + diagnostics + gradle
+    }
+
+    fn validate_generated_cell_ids(&self) -> Result<()> {
+        for comparison in &self.comparisons {
+            for runtime in &self.runtimes {
+                for pair_index in 1..=self.timing.pairs {
+                    validate_generated_cell_id(&CellSeed {
+                        kind: CellKind::StandaloneTiming,
+                        comparison,
+                        runtime,
+                        order: alternating_order(pair_index),
+                        pair_index,
+                        cache_mode: None,
+                        gradle: None,
+                    })?;
+                }
+                if self.diagnostics.enabled {
+                    for (index, order) in diagnostic_orders(self.diagnostics.layout)
+                        .iter()
+                        .enumerate()
+                    {
+                        validate_generated_cell_id(&CellSeed {
+                            kind: CellKind::StandaloneDiagnostic,
+                            comparison,
+                            runtime,
+                            order: *order,
+                            pair_index: u16::try_from(index + 1)
+                                .expect("diagnostic order count fits in u16"),
+                            cache_mode: None,
+                            gradle: None,
+                        })?;
+                    }
+                }
+                if self.gradle.enabled {
+                    for cache_mode in &self.gradle.github_cache_modes {
+                        for pair_index in 1..=self.gradle.pairs {
+                            validate_generated_cell_id(&CellSeed {
+                                kind: CellKind::GradleTiming,
+                                comparison,
+                                runtime,
+                                order: alternating_order(pair_index),
+                                pair_index,
+                                cache_mode: Some(*cache_mode),
+                                gradle: Some(&self.gradle),
+                            })?;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn fingerprint(&self) -> Result<String> {
@@ -528,22 +606,28 @@ impl ExperimentPlan {
                             cache_mode: None,
                             gradle: None,
                         },
-                    );
+                    )?;
                 }
                 if self.diagnostics.enabled {
-                    push_cell(
-                        &mut cells,
-                        &result_root,
-                        CellSeed {
-                            kind: CellKind::StandaloneDiagnostic,
-                            comparison,
-                            runtime,
-                            order: PairOrder::ABBA,
-                            pair_index: 1,
-                            cache_mode: None,
-                            gradle: None,
-                        },
-                    );
+                    for (index, order) in diagnostic_orders(self.diagnostics.layout)
+                        .iter()
+                        .enumerate()
+                    {
+                        push_cell(
+                            &mut cells,
+                            &result_root,
+                            CellSeed {
+                                kind: CellKind::StandaloneDiagnostic,
+                                comparison,
+                                runtime,
+                                order: *order,
+                                pair_index: u16::try_from(index + 1)
+                                    .expect("diagnostic order count fits in u16"),
+                                cache_mode: None,
+                                gradle: None,
+                            },
+                        )?;
+                    }
                 }
                 if self.gradle.enabled {
                     for cache_mode in &self.gradle.github_cache_modes {
@@ -560,7 +644,7 @@ impl ExperimentPlan {
                                     cache_mode: Some(*cache_mode),
                                     gradle: Some(&self.gradle),
                                 },
-                            );
+                            )?;
                         }
                     }
                 }
@@ -657,7 +741,14 @@ struct CellSeed<'a> {
     gradle: Option<&'a GradleSpec>,
 }
 
-fn push_cell(cells: &mut Vec<ExpandedCell>, result_root: &str, seed: CellSeed<'_>) {
+fn diagnostic_orders(layout: DiagnosticLayout) -> &'static [PairOrder] {
+    match layout {
+        DiagnosticLayout::Abba => &[PairOrder::ABBA],
+        DiagnosticLayout::ShardedPairs => &[PairOrder::AB, PairOrder::BA],
+    }
+}
+
+fn generated_cell_id(seed: &CellSeed<'_>) -> String {
     let kind = match seed.kind {
         CellKind::StandaloneTiming => "standalone-timing",
         CellKind::StandaloneDiagnostic => "standalone-diagnostic",
@@ -674,10 +765,19 @@ fn push_cell(cells: &mut Vec<ExpandedCell>, result_root: &str, seed: CellSeed<'_
         GradleCacheMode::Disabled => "disabled",
     });
     let cache_suffix = cache.map(|value| format!("-{value}")).unwrap_or_default();
-    let id = format!(
+    format!(
         "{}-{}-{kind}{cache_suffix}-p{:02}-{order}",
         seed.comparison.id, seed.runtime.id, seed.pair_index
-    );
+    )
+}
+
+fn validate_generated_cell_id(seed: &CellSeed<'_>) -> Result<()> {
+    validate_id("expanded cell id", &generated_cell_id(seed))
+}
+
+fn push_cell(cells: &mut Vec<ExpandedCell>, result_root: &str, seed: CellSeed<'_>) -> Result<()> {
+    let id = generated_cell_id(&seed);
+    validate_id("expanded cell id", &id)?;
     cells.push(ExpandedCell {
         result_uri: format!("{result_root}/cells/{id}"),
         id,
@@ -710,6 +810,7 @@ fn push_cell(cells: &mut Vec<ExpandedCell>, result_root: &str, seed: CellSeed<'_
             .unwrap_or_default(),
         runner_labels: seed.runtime.runner_labels.clone(),
     });
+    Ok(())
 }
 
 fn alternating_order(pair_index: u16) -> PairOrder {
@@ -1109,6 +1210,7 @@ mod tests {
             diagnostics: DiagnosticsSpec {
                 enabled: true,
                 max_parallel: 1,
+                layout: DiagnosticLayout::Abba,
                 jit_targets: vec!["LinearScanRegisterAllocator".to_string()],
             },
             gradle: GradleSpec::default(),
@@ -1127,6 +1229,56 @@ mod tests {
         assert_eq!(expanded.cells[0].kind, CellKind::StandaloneTiming);
         assert_eq!(expanded.cells[3].kind, CellKind::StandaloneDiagnostic);
         assert!(expanded.cells[0].result_uri.contains(&expanded.plan_sha256));
+    }
+
+    #[test]
+    fn expands_diagnostics_as_sharded_ab_and_ba_pairs() {
+        let mut plan = sample_plan();
+        plan.diagnostics.layout = DiagnosticLayout::ShardedPairs;
+        plan.diagnostics.max_parallel = 2;
+
+        assert_eq!(plan.expected_cell_count(), 5);
+        let expanded = plan.expand().unwrap();
+        assert_eq!(expanded.cells.len(), 5);
+        assert_eq!(expanded.cells[3].kind, CellKind::StandaloneDiagnostic);
+        assert_eq!(expanded.cells[3].order, PairOrder::AB);
+        assert_eq!(expanded.cells[3].pair_index, 1);
+        assert!(
+            expanded.cells[3]
+                .id
+                .ends_with("standalone-diagnostic-p01-ab")
+        );
+        assert_eq!(expanded.cells[4].kind, CellKind::StandaloneDiagnostic);
+        assert_eq!(expanded.cells[4].order, PairOrder::BA);
+        assert_eq!(expanded.cells[4].pair_index, 2);
+        assert!(
+            expanded.cells[4]
+                .id
+                .ends_with("standalone-diagnostic-p02-ba")
+        );
+        let diagnostics: Vec<_> = expanded
+            .cells
+            .iter()
+            .filter(|cell| cell.kind == CellKind::StandaloneDiagnostic)
+            .cloned()
+            .collect();
+        assert_eq!(github_strategy_cells(&diagnostics).len(), 2);
+    }
+
+    #[test]
+    fn default_diagnostic_layout_preserves_canonical_serialization() {
+        let plan = sample_plan();
+        let json = serde_json::to_value(&plan).unwrap();
+        assert!(json["diagnostics"].get("layout").is_none());
+        let toml = toml::to_string(&plan).unwrap();
+        assert!(!toml.contains("layout"));
+        let reparsed: ExperimentPlan = toml::from_str(&toml).unwrap();
+        assert_eq!(reparsed.diagnostics.layout, DiagnosticLayout::Abba);
+
+        let mut sharded = plan;
+        sharded.diagnostics.layout = DiagnosticLayout::ShardedPairs;
+        let json = serde_json::to_value(&sharded).unwrap();
+        assert_eq!(json["diagnostics"]["layout"], "sharded_pairs");
     }
 
     #[test]
@@ -1165,6 +1317,16 @@ mod tests {
                 .to_string()
                 .contains("missing candidate")
         );
+    }
+
+    #[test]
+    fn rejects_generated_cell_id_longer_than_evidence_limit() {
+        let mut plan = sample_plan();
+        plan.comparisons[0].id = "lazy-long-vs-range-loop-confirm".to_string();
+
+        let error = plan.validate().unwrap_err().to_string();
+        assert!(error.contains("expanded cell id"), "{error}");
+        assert!(error.contains("between 1 and 64 characters"), "{error}");
     }
 
     #[test]

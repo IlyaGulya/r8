@@ -20,6 +20,13 @@
       ],
       "type": "object"
     },
+    "DiagnosticLayout": {
+      "enum": [
+        "abba",
+        "sharded_pairs"
+      ],
+      "type": "string"
+    },
     "DiagnosticsSpec": {
       "additionalProperties": false,
       "properties": {
@@ -33,6 +40,9 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "layout": {
+          "$ref": "#/$defs/DiagnosticLayout"
         },
         "max_parallel": {
           "default": 1,

@@ -9,7 +9,8 @@ an immutable experiment plan.
 One CI job always contains both sides of one comparison:
 
 - timing cells alternate `AB / BA / AB / BA ...`;
-- diagnostic cells run `ABBA` with JFR, GC/safepoint, system-process and HotSpot compilation logs;
+- diagnostic cells run `ABBA` by default with JFR, GC/safepoint, system-process and HotSpot
+  compilation logs;
 - control and candidate must reproduce every expected output hash;
 - the report computes deltas inside each pod and only then aggregates paired deltas.
 
@@ -17,6 +18,10 @@ This deliberately does not compare an A pod with an unrelated B pod. `max_parall
 number of independent paired cells that may run at once.
 Diagnostics have their own `diagnostics.max_parallel` bound, so JFR/JIT fan-out cannot accidentally
 consume the timing lane's larger concurrency budget.
+Set `diagnostics.layout = "sharded_pairs"` to expand each diagnostic comparison/runtime into two
+independent `AB` and `BA` cells. This preserves balanced position evidence while allowing both
+orders, and multiple comparisons, to use the diagnostic concurrency budget concurrently. Omitting
+the field retains the single-cell `ABBA` layout and its existing plan fingerprint.
 
 ## Build and verify
 

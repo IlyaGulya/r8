@@ -87,7 +87,11 @@ elif [[ "$profile_mode" == "diagnostic" ]]; then
     method-profiling=max \
     allocation-profiling=medium \
     jdk.CompilerPhase#threshold=0ms \
+    jdk.ObjectCount#enabled=false \
+    jdk.ObjectCountAfterGC#enabled=false \
     --output "$output_dir/diagnostic.jfc"
+  # Heap census events can request old collections. Keep ordinary GC/JIT/allocation
+  # evidence enabled, but do not let the performance diagnostic request heap inspection.
   jfr_args+=(
     "-XX:+UnlockDiagnosticVMOptions"
     "-XX:+DebugNonSafepoints"

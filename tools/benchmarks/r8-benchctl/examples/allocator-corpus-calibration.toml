@@ -1,0 +1,31 @@
+# Illustrative synthetic contract, not observations from a benchmark workload.
+# Substitute independently qualified private reference cases and tolerances.
+schema_version = 1
+
+[[experiments]]
+id = "synthetic-regression-a"
+expected = "regression"
+metric = "allocator_wall"
+min_abs_delta_percent = 2.0
+
+[[experiments]]
+id = "synthetic-regression-b"
+expected = "regression"
+metric = "allocator_wall"
+min_abs_delta_percent = 1.0
+
+[[experiments]]
+id = "synthetic-neutral-a"
+expected = "neutral"
+metric = "allocator_wall"
+neutral_tolerance_percent = 2.0
+
+[[experiments]]
+id = "synthetic-neutral-b"
+expected = "neutral"
+metric = "allocator_wall"
+neutral_tolerance_percent = 2.0
+
+[[experiments]]
+id = "synthetic-output-mismatch"
+expected = "correctness_failure"

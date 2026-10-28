@@ -1,0 +1,67 @@
+schema_version = 1
+experiment_id = "example-ci"
+max_parallel = 10
+
+[storage]
+root_uri = "gs://example-bucket/r8-benchmark"
+
+[artifacts.control]
+repository = "example/r8"
+commit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+jar_sha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+[artifacts.candidate-a]
+repository = "example/r8"
+commit = "cccccccccccccccccccccccccccccccccccccccc"
+jar_sha256 = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+
+[artifacts.candidate-b]
+repository = "example/r8"
+commit = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+jar_sha256 = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+
+[artifacts.candidate-c]
+repository = "example/r8"
+commit = "0123456789abcdef0123456789abcdef01234567"
+jar_sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+[input]
+archive_sha256 = "1111111111111111111111111111111111111111111111111111111111111111"
+expected_outputs_sha256 = "2222222222222222222222222222222222222222222222222222222222222222"
+
+[[comparisons]]
+id = "candidate-a"
+control = "control"
+candidate = "candidate-a"
+
+[[comparisons]]
+id = "candidate-b"
+control = "control"
+candidate = "candidate-b"
+
+[[comparisons]]
+id = "candidate-c"
+control = "control"
+candidate = "candidate-c"
+
+[[runtimes]]
+id = "zulu21-g1"
+java_distribution = "zulu"
+java_version = "21.0.6"
+gc = "g1"
+xmx = "22g"
+active_processors = 10
+r8_threads = 10
+runner_labels = ["self-hosted", "linux"]
+
+[timing]
+pairs = 8
+cooldown_seconds = 15
+
+[diagnostics]
+enabled = true
+max_parallel = 3
+jit_targets = [
+  "LinearScanRegisterAllocator",
+  "RegisterPositionsWithExtraBlockedRegisters",
+]

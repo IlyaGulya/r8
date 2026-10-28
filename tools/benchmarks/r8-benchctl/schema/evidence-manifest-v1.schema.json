@@ -1,0 +1,347 @@
+{
+  "$defs": {
+    "BenchmarkRun": {
+      "additionalProperties": false,
+      "properties": {
+        "metrics": {
+          "$ref": "#/$defs/RunMetrics"
+        },
+        "ordinal": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "outputs_sha256": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "variant": {
+          "$ref": "#/$defs/Variant"
+        }
+      },
+      "required": [
+        "ordinal",
+        "variant",
+        "metrics",
+        "outputs_sha256"
+      ],
+      "type": "object"
+    },
+    "CellKind": {
+      "enum": [
+        "standalone_timing",
+        "standalone_diagnostic",
+        "gradle_timing"
+      ],
+      "type": "string"
+    },
+    "EvidenceFile": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "size_bytes"
+      ],
+      "type": "object"
+    },
+    "EvidenceState": {
+      "enum": [
+        "running",
+        "complete",
+        "failed",
+        "invalid"
+      ],
+      "type": "string"
+    },
+    "ExpandedCell": {
+      "additionalProperties": false,
+      "properties": {
+        "active_processors": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "android_commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "candidate_artifact": {
+          "type": "string"
+        },
+        "comparison_id": {
+          "type": "string"
+        },
+        "control_artifact": {
+          "type": "string"
+        },
+        "gc": {
+          "$ref": "#/$defs/GarbageCollector"
+        },
+        "gradle_arguments": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "gradle_cache_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GradleCacheMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "gradle_cleanup_tasks": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "gradle_tasks": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "java_distribution": {
+          "type": "string"
+        },
+        "java_version": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/CellKind"
+        },
+        "order": {
+          "$ref": "#/$defs/PairOrder"
+        },
+        "pair_index": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "r8_threads": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "result_uri": {
+          "type": "string"
+        },
+        "runner_labels": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "runtime_id": {
+          "type": "string"
+        },
+        "xmx": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "comparison_id",
+        "runtime_id",
+        "order",
+        "pair_index",
+        "control_artifact",
+        "candidate_artifact",
+        "java_distribution",
+        "java_version",
+        "gc",
+        "xmx",
+        "active_processors",
+        "r8_threads",
+        "runner_labels",
+        "result_uri"
+      ],
+      "type": "object"
+    },
+    "GarbageCollector": {
+      "enum": [
+        "g1",
+        "parallel"
+      ],
+      "type": "string"
+    },
+    "GradleCacheMode": {
+      "enum": [
+        "all",
+        "exclude-build-cache",
+        "disabled"
+      ],
+      "type": "string"
+    },
+    "PairOrder": {
+      "enum": [
+        "AB",
+        "BA",
+        "ABBA"
+      ],
+      "type": "string"
+    },
+    "RunMetrics": {
+      "additionalProperties": false,
+      "properties": {
+        "cycles": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "instructions": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_rss_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "peak_footprint_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "system_seconds": {
+          "format": "double",
+          "type": "number"
+        },
+        "user_seconds": {
+          "format": "double",
+          "type": "number"
+        },
+        "wall_seconds": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "wall_seconds",
+        "user_seconds",
+        "system_seconds",
+        "max_rss_bytes",
+        "peak_footprint_bytes"
+      ],
+      "type": "object"
+    },
+    "Variant": {
+      "enum": [
+        "control",
+        "candidate"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "bundle": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/EvidenceFile"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "cell": {
+      "$ref": "#/$defs/ExpandedCell"
+    },
+    "cell_id": {
+      "type": "string"
+    },
+    "completed_utc": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "environment": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "type": "object"
+    },
+    "experiment_id": {
+      "type": "string"
+    },
+    "files": {
+      "items": {
+        "$ref": "#/$defs/EvidenceFile"
+      },
+      "type": "array"
+    },
+    "plan_sha256": {
+      "type": "string"
+    },
+    "runs": {
+      "items": {
+        "$ref": "#/$defs/BenchmarkRun"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "started_utc": {
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/EvidenceState"
+    }
+  },
+  "required": [
+    "schema_version",
+    "experiment_id",
+    "plan_sha256",
+    "cell_id",
+    "cell",
+    "state",
+    "started_utc",
+    "environment",
+    "runs",
+    "files"
+  ],
+  "title": "EvidenceManifest",
+  "type": "object"
+}

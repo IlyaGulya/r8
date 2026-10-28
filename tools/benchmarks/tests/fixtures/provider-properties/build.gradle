@@ -1,0 +1,17 @@
+plugins { id 'java' }
+
+dependencies {
+    testImplementation files(System.getenv('FIXTURE_JUNIT_JAR'))
+    testImplementation files(System.getenv('FIXTURE_HAMCREST_JAR'))
+}
+
+tasks.withType(JavaCompile).configureEach { options.release = 11 }
+
+tasks.named('test', Test) {
+    useJUnit()
+    systemProperty 'fixture.provider.path', providers.provider {
+        layout.projectDirectory.dir('fixture-classes').asFile.absolutePath
+    }
+    systemProperty 'fixture.plain.path', layout.projectDirectory.dir('fixture-classes').asFile.absolutePath
+    systemProperty 'fixture.provider.boolean', providers.provider { false }
+}

@@ -1,0 +1,17 @@
+// Opt-in compatibility adapter for Test.systemProperty values supplied as Providers.
+// Resolve immediately before execution, not while other projects are configuring.
+// No test selection, dependency graph, compiler source or benchmark flags are changed.
+import org.gradle.api.provider.Provider
+import org.gradle.api.tasks.testing.Test
+
+gradle.beforeProject { project ->
+    project.tasks.withType(Test).configureEach { test ->
+        test.doFirst {
+            new LinkedHashMap(test.systemProperties).each { name, value ->
+                if (value instanceof Provider) {
+                    test.systemProperty(name, value.get())
+                }
+            }
+        }
+    }
+}
